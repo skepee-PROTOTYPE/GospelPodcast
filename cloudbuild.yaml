@@ -1,0 +1,15 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/gospel-tts'
+      - '-f'
+      - 'cloud_run_app/Dockerfile'
+      - '.'
+
+images:
+  - 'gcr.io/$PROJECT_ID/gospel-tts'
+
+options:
+  logging: CLOUD_LOGGING_ONLY

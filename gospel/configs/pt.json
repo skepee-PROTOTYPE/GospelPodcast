@@ -1,0 +1,15 @@
+{
+  "language": "pt",
+  "feed_url": "https://www.vaticannews.va/pt/palavra-do-dia.rss.xml",
+  "bucket_name": "gospelpodcast-87c74.firebasestorage.app",
+  "storage_prefix": "gospel/pt",
+  "voice_key": "pt-female",
+  "podcast_info": {
+    "title": "Evangelho Diário (Português)",
+    "author": "Vatican News",
+    "website": "",
+    "description": "Leitura diária do Evangelho",
+    "cover_art": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/pt/cover.png",
+    "rss_url": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/pt/podcast_feed.xml"
+  }
+}

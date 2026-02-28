@@ -1,0 +1,22 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Gospel podcast assets (cover art, etc.) – public read
+    match /gospel/{fileName} {
+      allow read;
+      allow write: if false;
+    }
+
+    // Gospel podcast audio and RSS feeds – public read, write only via Cloud Run SA
+    match /gospel/{lang}/{allPaths=**} {
+      allow read;           // anyone can download MP3s and fetch the RSS xml
+      allow write: if false; // writes go through Admin SDK (Cloud Run), never from clients
+    }
+
+    // Deny everything else by default
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

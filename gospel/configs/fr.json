@@ -1,0 +1,15 @@
+{
+  "language": "fr",
+  "feed_url": "https://www.vaticannews.va/fr/evangile-du-jour.rss.xml",
+  "bucket_name": "gospelpodcast-87c74.firebasestorage.app",
+  "storage_prefix": "gospel/fr",
+  "voice_key": "fr-female",
+  "podcast_info": {
+    "title": "Évangile Quotidien (Français)",
+    "author": "Vatican News",
+    "website": "",
+    "description": "Lecture de l'Évangile du jour",
+    "cover_art": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/fr/cover.png",
+    "rss_url": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/fr/podcast_feed.xml"
+  }
+}

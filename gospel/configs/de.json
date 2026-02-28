@@ -1,0 +1,15 @@
+{
+  "language": "de",
+  "feed_url": "https://www.vaticannews.va/de/tagesevangelium-und-tagesliturgie.rss.xml",
+  "bucket_name": "gospelpodcast-87c74.firebasestorage.app",
+  "storage_prefix": "gospel/de",
+  "voice_key": "de-female",
+  "podcast_info": {
+    "title": "Tägliches Evangelium (Deutsch)",
+    "author": "Vatican News",
+    "website": "",
+    "description": "Tägliche Evangeliumslesung",
+    "cover_art": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/de/cover.png",
+    "rss_url": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/de/podcast_feed.xml"
+  }
+}

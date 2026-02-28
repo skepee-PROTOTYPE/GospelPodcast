@@ -1,0 +1,15 @@
+{
+  "language": "es",
+  "feed_url": "https://www.vaticannews.va/es/evangelio-de-hoy.rss.xml",
+  "bucket_name": "gospelpodcast-87c74.firebasestorage.app",
+  "storage_prefix": "gospel/es",
+  "voice_key": "es-female",
+  "podcast_info": {
+    "title": "Evangelio Diario (Español)",
+    "author": "Vatican News",
+    "website": "",
+    "description": "Lectura del Evangelio diario",
+    "cover_art": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/es/cover.png",
+    "rss_url": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/es/podcast_feed.xml"
+  }
+}

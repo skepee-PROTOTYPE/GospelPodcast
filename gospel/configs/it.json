@@ -1,0 +1,15 @@
+{
+  "language": "it",
+  "feed_url": "https://www.vaticannews.va/it/vangelo-del-giorno-e-parola-del-giorno.rss.xml",
+  "bucket_name": "gospelpodcast-87c74.firebasestorage.app",
+  "storage_prefix": "gospel/it",
+  "voice_key": "it-female",
+  "podcast_info": {
+    "title": "Vangelo Quotidiano (Italiano)",
+    "author": "Vatican News",
+    "website": "",
+    "description": "Vangelo quotidiano da Vatican News",
+    "cover_art": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/it/cover.png",
+    "rss_url": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/it/podcast_feed.xml"
+  }
+}

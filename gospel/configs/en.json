@@ -1,0 +1,15 @@
+{
+  "language": "en",
+  "feed_url": "https://www.vaticannews.va/en/word-of-the-day.rss.xml",
+  "bucket_name": "gospelpodcast-87c74.firebasestorage.app",
+  "storage_prefix": "gospel/en",
+  "voice_key": "en-female",
+  "podcast_info": {
+    "title": "Daily Gospel (English)",
+    "author": "Vatican News",
+    "website": "",
+    "description": "Daily Gospel reading from Vatican News",
+    "cover_art": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/en/cover.png",
+    "rss_url": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/en/podcast_feed.xml"
+  }
+}

@@ -1,0 +1,3 @@
+feedparser>=6.0.10
+gTTS>=2.5.1
+pydub>=0.25.1

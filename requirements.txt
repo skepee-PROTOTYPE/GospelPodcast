@@ -1,0 +1,4 @@
+feedparser>=6.0.10          # RSS parsing
+firebase-admin>=6.0.0       # Firebase Admin SDK
+gTTS>=2.5.1                 # Text-to-Speech
+pydub>=0.25.1               # Audio duration parsing

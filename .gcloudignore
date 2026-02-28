@@ -1,0 +1,13 @@
+.gcloudignore
+.git
+.venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+*.egg-info
+.pytest_cache
+gospel/out
+gospel/out_spotify
+cover*.png
+cover*.jpg
+gospel/cover.jpg

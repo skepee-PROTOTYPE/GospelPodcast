@@ -1,0 +1,29 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Local audio/temp output
+gospel/out/
+gospel/out_spotify/
+gospel/podcast_feed_tmp.xml
+gospel_tts_app/*.mp3
+gospel_tts_app/*.xml
+
+# Cover images (stored in Firebase, not in repo)
+cover*.jpg
+cover*.png
+gospel/cover.jpg
+
+# Environment / secrets
+.env
+*.json.bak
+service_account*.json
+*credentials*.json
+
+# OS
+.DS_Store
+Thumbs.db
