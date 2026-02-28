@@ -66,9 +66,12 @@ class GospelPodcastPublisher:
             logger.error(f"Firebase upload failed: {e}")
             return None
 
-    def add_episode(self, audio_url: str, title: str, description: str, duration: int = 0):
-        pub_date = datetime.now().strftime('%a, %d %b %Y %H:%M:%S GMT')
-        guid = f"{self.podcast_info.get('website', '')}/episode/{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    def add_episode(self, audio_url: str, title: str, description: str, duration: int = 0,
+                    pub_date: str = '', guid: str = ''):
+        if not pub_date:
+            pub_date = datetime.now().strftime('%a, %d %b %Y %H:%M:%S GMT')
+        if not guid:
+            guid = f"{self.podcast_info.get('website', '')}/episode/{datetime.now().strftime('%Y%m%d%H%M%S')}"
         self.episodes.insert(0, {
             'title': title,
             'description': description,

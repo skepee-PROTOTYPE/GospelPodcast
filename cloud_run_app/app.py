@@ -65,7 +65,10 @@ def _do_publish(lang: str) -> Tuple[Dict, int]:
         return {"error": "audio upload failed"}, 500
 
     # Rebuild + upload RSS feed
-    publisher.add_episode(audio_url, title, description, duration=int(episode.get('duration', 0) or 0))
+    publisher.add_episode(audio_url, title, description,
+                          duration=int(episode.get('duration', 0) or 0),
+                          pub_date=latest.get('pub_date', ''),
+                          guid=latest.get('link', ''))
     rss_local = publisher.generate_rss()
     ok = publisher.upload_rss(rss_local)
     _cleanup(audio_path, rss_local)
@@ -77,9 +80,63 @@ def _do_publish(lang: str) -> Tuple[Dict, int]:
     return {"lang": lang, "title": title, "audio_url": audio_url, "rss": publisher.rss_blob_path}, 200
 
 
-# ── endpoints ─────────────────────────────────────────────────────────────────
+def _do_publish_history(lang: str) -> Tuple[Dict, int]:
+    """Generate audio for ALL available RSS entries and build a full RSS feed."""
+    if lang not in FEED_URLS:
+        return {"error": f"unsupported lang: {lang}"}, 400
 
-@app.route('/ping', methods=['GET'])
+    feed_url = FEED_URLS[lang]
+    rss_client = RSSClient(feed_url)
+    entries = rss_client.fetch_all()
+    if not entries:
+        return {"error": "no rss entries"}, 404
+
+    cfg_path = os.path.join(CONFIG_DIR, f"{lang}.json")
+    publisher = GospelPodcastPublisher(cfg_path)
+    audio_gen = AudioGenerator(voice=f"{lang}-female", speed='normal')
+
+    published = []
+    errors = []
+    # Process oldest first so RSS feed is in correct chronological order
+    for entry in reversed(entries):
+        title = entry['title']
+        description = entry['summary'] or title
+        try:
+            episode = audio_gen.create_podcast_episode(title, description)
+            audio_path = episode['audio_path']
+            audio_url = publisher.upload_audio(audio_path)
+            try:
+                os.remove(audio_path)
+            except Exception:
+                pass
+            if not audio_url:
+                errors.append({"title": title, "error": "audio upload failed"})
+                continue
+            publisher.add_episode(audio_url, title, description,
+                                  duration=int(episode.get('duration', 0) or 0),
+                                  pub_date=entry.get('pub_date', ''),
+                                  guid=entry.get('link', ''))
+            published.append({"title": title, "audio_url": audio_url})
+            logger.info("[%s] history: %s", lang, title)
+        except Exception as e:
+            logger.error("[%s] history error for '%s': %s", lang, title, e)
+            errors.append({"title": title, "error": str(e)})
+
+    rss_local = publisher.generate_rss()
+    ok = publisher.upload_rss(rss_local)
+    try:
+        os.remove(rss_local)
+    except Exception:
+        pass
+
+    if not ok:
+        return {"error": "rss upload failed"}, 500
+
+    return {"lang": lang, "published": len(published), "errors": errors,
+            "rss": publisher.rss_blob_path}, 200
+
+
+
 def healthz():
     return jsonify({"status": "ok"})
 
@@ -104,6 +161,24 @@ def publish_all():
         result, status = _do_publish(lang)
         results[lang] = {"status": status, "detail": result}
 
+    overall = 200 if all(v["status"] == 200 for v in results.values()) else 207
+    return jsonify(results), overall
+
+
+@app.post('/publish-history')
+def publish_history():
+    """Backfill all available RSS entries for one or all languages.
+    Query param: ?lang=XX  (omit for all languages)
+    """
+    lang = request.args.get('lang')
+    if lang:
+        result, status = _do_publish_history(lang)
+        return jsonify(result), status
+    # All languages
+    results = {}
+    for l in FEED_URLS:
+        result, status = _do_publish_history(l)
+        results[l] = {"status": status, "detail": result}
     overall = 200 if all(v["status"] == 200 for v in results.values()) else 207
     return jsonify(results), overall
 
