@@ -58,6 +58,18 @@ class GospelPodcastPublisher:
             bucket = self.storage.bucket()
             filename = os.path.basename(audio_path)
             blob_path = f"{self.storage_prefix}/podcast_audio/{filename}"
+
+            # Delete all previous MP3s for this language before uploading the new one.
+            # The RSS is regenerated fresh each run, so old files are never referenced.
+            old_blobs = bucket.list_blobs(prefix=f"{self.storage_prefix}/podcast_audio/")
+            for old_blob in old_blobs:
+                if old_blob.name.endswith('.mp3') and old_blob.name != blob_path:
+                    try:
+                        old_blob.delete()
+                        logger.info(f"Deleted old audio: {old_blob.name}")
+                    except Exception as del_err:
+                        logger.warning(f"Could not delete {old_blob.name}: {del_err}")
+
             blob = bucket.blob(blob_path)
             blob.upload_from_filename(audio_path, content_type='audio/mpeg')
             blob.make_public()

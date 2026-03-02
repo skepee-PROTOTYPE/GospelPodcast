@@ -22,6 +22,7 @@ gospel/cover.jpg
 .env
 *.json.bak
 service_account*.json
+serviceAccountKey.json
 *credentials*.json
 
 # OS

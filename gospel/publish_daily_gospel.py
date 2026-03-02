@@ -41,6 +41,12 @@ def main():
         print('Failed to upload audio to Firebase. Check serviceAccountKey.json and bucket.')
         return
 
+    # Remove local MP3 immediately — Firebase copy is the only one needed.
+    try:
+        os.remove(audio_path)
+    except OSError:
+        pass
+
     publisher.add_episode(audio_url, title, description, duration=int(episode.get('duration', 0)))
     rss_local = publisher.generate_rss()
     ok = publisher.upload_rss(rss_local)
