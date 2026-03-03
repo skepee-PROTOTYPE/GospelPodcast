@@ -36,6 +36,8 @@ def main():
     audio_path = episode['audio_path']
 
     publisher = GospelPodcastPublisher(os.path.join(LANG_CONFIG_DIR, f"{args.lang}.json"))
+    # Restore episode history from the published RSS before adding today's episode.
+    publisher.load_existing_feed()
     audio_url = publisher.upload_audio(audio_path)
     if not audio_url:
         print('Failed to upload audio to Firebase. Check serviceAccountKey.json and bucket.')
@@ -47,7 +49,14 @@ def main():
     except OSError:
         pass
 
-    publisher.add_episode(audio_url, title, description, duration=int(episode.get('duration', 0)))
+    publisher.add_episode(
+        audio_url, title, description,
+        duration=int(episode.get('duration', 0)),
+        pub_date=latest.get('published', ''),
+        guid=latest.get('link', ''),   # Vatican News URL as stable guid
+    )
+    # Keep up to 6 months of history (~180 episodes); delete older MP3s from storage.
+    publisher.prune_episodes(max_episodes=180)
     rss_local = publisher.generate_rss()
     ok = publisher.upload_rss(rss_local)
     if ok:

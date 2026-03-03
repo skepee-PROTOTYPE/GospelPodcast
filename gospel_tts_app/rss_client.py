@@ -1,5 +1,5 @@
 import feedparser
-from gospel.text_normalizer import normalize_for_tts
+from gospel.text_normalizer import normalize_for_tts, html_to_plain_text
 
 class RSSClient:
     def __init__(self, feed_url: str):
@@ -8,7 +8,9 @@ class RSSClient:
     def _parse_entry(self, entry):
         title = normalize_for_tts(entry.get('title', ''), feed_url=self.feed_url, flatten_lines=False)
         summary_raw = entry.get('summary') or entry.get('description') or ''
-        summary = normalize_for_tts(summary_raw, feed_url=self.feed_url, flatten_lines=False)
+        # Use html_to_plain_text (without TTS smoothing) to preserve parentheses
+        # for pope-comment attribution detection in build_liturgy_segments.
+        summary = html_to_plain_text(summary_raw)
         # RFC 2822 pub_date from RSS, fallback to empty string
         pub_date = entry.get('published', '')
         link = entry.get('link', '')

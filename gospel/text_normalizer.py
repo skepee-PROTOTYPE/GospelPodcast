@@ -473,6 +473,13 @@ def build_liturgy_segments(description: str, lang: str = "it") -> list[str]:
     inserted between them by the audio generator.
     If no structure is detected the full text is returned as a single segment.
     """
+    # --- Extract pope comment attribution BEFORE normalisation strips parentheses ---
+    # The description arrives with parentheses intact (html_to_plain_text only);
+    # normalize_for_tts (called below) removes them via _smooth_for_tts.
+    raw_lines = [l.strip() for l in description.splitlines() if l.strip()]
+    raw_last = raw_lines[-1] if raw_lines else description.strip()
+    pre_comment_content_raw, pre_comment_meta = _extract_pope_meta(raw_last)
+
     text = normalize_for_tts(description, lang=lang, flatten_lines=False)
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
@@ -490,9 +497,7 @@ def build_liturgy_segments(description: str, lang: str = "it") -> list[str]:
     idx_salmo   = find("salmo")
     idx_vangelo = find("vangelo")
 
-    last_line = lines[-1]
-    comment_content, comment_meta = _extract_pope_meta(last_line)
-    has_comment = comment_meta is not None and idx_vangelo != -1
+    has_comment = pre_comment_meta is not None and idx_vangelo != -1
 
     if idx_prima == -1 or idx_vangelo == -1:
         return [text]
@@ -536,10 +541,12 @@ def build_liturgy_segments(description: str, lang: str = "it") -> list[str]:
     # --- Pope's comment ---
     if has_comment:
         comment_word, pope_title = POPE_COMMENT_LABELS.get(lang, POPE_COMMENT_LABELS["it"])
-        pope_intro = comment_meta.replace(" - ", ", ")
+        pope_intro = pre_comment_meta.replace(" - ", ", ")
         if not re.search(r"\b(papa|pope|pape|papst)\b", pope_intro, re.IGNORECASE):
             pope_intro = f"{pope_title} {pope_intro}"
         comment_section = f"{comment_word} {pope_intro}."
+        # Normalise the raw comment content for TTS
+        comment_content = normalize_for_tts(pre_comment_content_raw, lang=lang) if pre_comment_content_raw else ""
         if comment_content:
             comment_section = f"{comment_section}\n{comment_content}"
         segments.append(comment_section)

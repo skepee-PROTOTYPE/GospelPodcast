@@ -1,8 +1,10 @@
+import io
 import os
 import json
 import logging
 from datetime import datetime
 from typing import Optional, Dict, Any, List
+from urllib.parse import urlparse
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 
@@ -52,24 +54,90 @@ class GospelPodcastPublisher:
         self.storage = storage
         self._firebase_init_done = True
 
+    def load_existing_feed(self) -> None:
+        """Download the published RSS from Firebase and populate self.episodes.
+        Call this before add_episode() so history is preserved across runs.
+        """
+        try:
+            self._init_firebase()
+            bucket = self.storage.bucket()
+            blob = bucket.blob(self.rss_blob_path)
+            if not blob.exists():
+                logger.info("No existing RSS feed found in storage — starting fresh.")
+                return
+            xml_bytes = blob.download_as_bytes()
+            root = ET.fromstring(xml_bytes)
+            ns = {
+                'itunes': 'http://www.itunes.com/dtds/podcast-1.0.dtd',
+            }
+            channel = root.find('channel')
+            if channel is None:
+                return
+            self.episodes = []
+            for item in channel.findall('item'):
+                enclosure = item.find('enclosure')
+                audio_url = enclosure.get('url', '') if enclosure is not None else ''
+                title_el = item.find('title')
+                desc_el = item.find('description')
+                pub_el = item.find('pubDate')
+                guid_el = item.find('guid')
+                dur_el = item.find('itunes:duration', ns)
+                title = title_el.text or '' if title_el is not None else ''
+                description = desc_el.text or '' if desc_el is not None else ''
+                pub_date = pub_el.text or '' if pub_el is not None else ''
+                guid = guid_el.text or '' if guid_el is not None else ''
+                try:
+                    duration = int(dur_el.text or 0) if dur_el is not None else 0
+                except ValueError:
+                    duration = 0
+                if audio_url:
+                    self.episodes.append({
+                        'title': title,
+                        'description': description,
+                        'audio_url': audio_url,
+                        'pub_date': pub_date,
+                        'guid': guid,
+                        'duration': duration,
+                    })
+            logger.info(f"Loaded {len(self.episodes)} existing episodes from RSS.")
+        except Exception as e:
+            logger.warning(f"Could not load existing RSS feed: {e}. Starting fresh.")
+            self.episodes = []
+
+    def prune_episodes(self, max_episodes: int = 180) -> None:
+        """Trim episode history to max_episodes, deleting expired MP3s from storage."""
+        if len(self.episodes) <= max_episodes:
+            return
+        expired = self.episodes[max_episodes:]
+        self.episodes = self.episodes[:max_episodes]
+        try:
+            self._init_firebase()
+            bucket = self.storage.bucket()
+            for ep in expired:
+                audio_url = ep.get('audio_url', '')
+                if not audio_url:
+                    continue
+                # Extract blob path from public URL:
+                # https://storage.googleapis.com/{bucket}/{blob_path}
+                parsed = urlparse(audio_url)
+                # path is /{bucket}/{blob_path}
+                path_parts = parsed.path.lstrip('/').split('/', 1)
+                if len(path_parts) == 2:
+                    blob_path = path_parts[1]
+                    try:
+                        bucket.blob(blob_path).delete()
+                        logger.info(f"Deleted expired audio: {blob_path}")
+                    except Exception as del_err:
+                        logger.warning(f"Could not delete expired audio {blob_path}: {del_err}")
+        except Exception as e:
+            logger.warning(f"Error during episode pruning: {e}")
+
     def upload_audio(self, audio_path: str) -> Optional[str]:
         try:
             self._init_firebase()
             bucket = self.storage.bucket()
             filename = os.path.basename(audio_path)
             blob_path = f"{self.storage_prefix}/podcast_audio/{filename}"
-
-            # Delete all previous MP3s for this language before uploading the new one.
-            # The RSS is regenerated fresh each run, so old files are never referenced.
-            old_blobs = bucket.list_blobs(prefix=f"{self.storage_prefix}/podcast_audio/")
-            for old_blob in old_blobs:
-                if old_blob.name.endswith('.mp3') and old_blob.name != blob_path:
-                    try:
-                        old_blob.delete()
-                        logger.info(f"Deleted old audio: {old_blob.name}")
-                    except Exception as del_err:
-                        logger.warning(f"Could not delete {old_blob.name}: {del_err}")
-
             blob = bucket.blob(blob_path)
             blob.upload_from_filename(audio_path, content_type='audio/mpeg')
             blob.make_public()

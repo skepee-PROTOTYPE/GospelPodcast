@@ -10,7 +10,7 @@ from gtts import gTTS
 from gospel.text_normalizer import normalize_for_tts, build_liturgy_segments
 
 # Silence duration (seconds) inserted between liturgy sections.
-SECTION_SILENCE_S = 3.5
+SECTION_SILENCE_S = 2.5
 
 # gTTS top-level domain overrides — controls regional accent.
 # 'pt' routes to translate.google.pt → European Portuguese (Portugal)
