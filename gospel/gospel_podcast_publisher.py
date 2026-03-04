@@ -90,6 +90,12 @@ class GospelPodcastPublisher:
                     duration = int(dur_el.text or 0) if dur_el is not None else 0
                 except ValueError:
                     duration = 0
+                try:
+                    file_size = int(enclosure.get('length', 0)) if enclosure is not None else 0
+                    if file_size <= 1:       # '1' was the old placeholder
+                        file_size = 0
+                except (ValueError, TypeError):
+                    file_size = 0
                 if audio_url:
                     self.episodes.append({
                         'title': title,
@@ -98,6 +104,7 @@ class GospelPodcastPublisher:
                         'pub_date': pub_date,
                         'guid': guid,
                         'duration': duration,
+                        'file_size': file_size,
                     })
             logger.info(f"Loaded {len(self.episodes)} existing episodes from RSS.")
         except Exception as e:
@@ -147,7 +154,7 @@ class GospelPodcastPublisher:
             return None
 
     def add_episode(self, audio_url: str, title: str, description: str, duration: int = 0,
-                    pub_date: str = '', guid: str = ''):
+                    pub_date: str = '', guid: str = '', file_size: int = 0):
         if not pub_date:
             pub_date = datetime.now().strftime('%a, %d %b %Y %H:%M:%S GMT')
         if not guid:
@@ -158,7 +165,8 @@ class GospelPodcastPublisher:
             'audio_url': audio_url,
             'pub_date': pub_date,
             'guid': guid,
-            'duration': duration
+            'duration': duration,
+            'file_size': file_size,
         })
 
     def _sanitize(self, s: str) -> str:
@@ -220,7 +228,7 @@ class GospelPodcastPublisher:
             ET.SubElement(item, 'enclosure', {
                 'url': ep['audio_url'],
                 'type': 'audio/mpeg',
-                'length': '1'
+                'length': str(ep.get('file_size', 0) or 0)
             })
             if ep.get('duration', 0) > 0:
                 ET.SubElement(item, 'itunes:duration').text = str(ep['duration'])

@@ -43,6 +43,7 @@ def main():
         print('Failed to upload audio to Firebase. Check serviceAccountKey.json and bucket.')
         return
 
+    file_size = os.path.getsize(audio_path)
     # Remove local MP3 immediately — Firebase copy is the only one needed.
     try:
         os.remove(audio_path)
@@ -54,6 +55,7 @@ def main():
         duration=int(episode.get('duration', 0)),
         pub_date=latest.get('published', ''),
         guid=latest.get('link', ''),   # Vatican News URL as stable guid
+        file_size=file_size,
     )
     # Keep up to 6 months of history (~180 episodes); delete older MP3s from storage.
     publisher.prune_episodes(max_episodes=180)

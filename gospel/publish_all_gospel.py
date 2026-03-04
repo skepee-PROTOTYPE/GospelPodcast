@@ -99,9 +99,10 @@ def publish_all_for_lang(lang: str) -> None:
 
             audio_url = publisher.upload_audio(audio_path)
             try:
+                file_size = os.path.getsize(audio_path)
                 os.remove(audio_path)
             except OSError:
-                pass
+                file_size = 0
 
             if not audio_url:
                 print(f"    ERROR: audio upload failed.")
@@ -114,6 +115,7 @@ def publish_all_for_lang(lang: str) -> None:
                 duration=int(episode.get('duration', 0)),
                 pub_date=pub_date,
                 guid=link or '',   # use Vatican News URL as stable guid
+                file_size=file_size,
             )
             published_count += 1
             print(f"    OK: {audio_url}")
