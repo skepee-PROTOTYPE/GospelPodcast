@@ -3,7 +3,7 @@
   "feed_url": "https://www.vaticannews.va/fr/evangile-du-jour.rss.xml",
   "bucket_name": "gospelpodcast-87c74.firebasestorage.app",
   "storage_prefix": "gospel/fr",
-  "voice_key": "fr-female",
+  "voice_key": "fr-FR-Neural2-B",
   "podcast_info": {
     "title": "Évangile Quotidien (Français)",
     "author": "Vatican News",

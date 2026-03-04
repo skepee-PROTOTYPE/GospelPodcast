@@ -3,7 +3,7 @@
   "feed_url": "https://www.vaticannews.va/es/evangelio-de-hoy.rss.xml",
   "bucket_name": "gospelpodcast-87c74.firebasestorage.app",
   "storage_prefix": "gospel/es",
-  "voice_key": "es-female",
+  "voice_key": "es-ES-Neural2-B",
   "podcast_info": {
     "title": "Evangelio Diario (Español)",
     "author": "Vatican News",

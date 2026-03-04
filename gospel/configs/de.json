@@ -3,7 +3,7 @@
   "feed_url": "https://www.vaticannews.va/de/tagesevangelium-und-tagesliturgie.rss.xml",
   "bucket_name": "gospelpodcast-87c74.firebasestorage.app",
   "storage_prefix": "gospel/de",
-  "voice_key": "de-female",
+  "voice_key": "de-DE-Neural2-B",
   "podcast_info": {
     "title": "Tägliches Evangelium (Deutsch)",
     "author": "Vatican News",

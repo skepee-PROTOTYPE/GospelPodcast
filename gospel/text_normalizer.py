@@ -294,6 +294,7 @@ def _smooth_for_tts(text: str, language: str = "it", flatten_lines: bool = True)
     - Removes mid-sentence colons (introduces unnecessary pause)
     - Removes parentheses (reference wrappers cause brief pauses)
     - Removes dots that sit at a word boundary
+    - Converts trailing-apostrophe accent notation (Gesu' → Gesù, cosi' → così)
     Applied to all languages.
     """
     if not text:
@@ -305,6 +306,21 @@ def _smooth_for_tts(text: str, language: str = "it", flatten_lines: bool = True)
     # section boundaries in the multi-line text are preserved.
     if language == "it":
         smoothed = re.sub(r"\bR\.[ \t]*", "", smoothed)
+    # Convert apostrophe-accent notation to proper Unicode accented chars.
+    # Pattern: vowel followed by ' at word-end (before space/punct/end).
+    # Italian, French and Portuguese all use this convention in some sources.
+    # Defaults to grave accent (the most common in liturgical Italian);
+    # e stays as è which is fine for stress marking purposes.
+    if language in ("it", "fr", "pt"):
+        _GRAVE = str.maketrans("aeiouAEIOU", "àèìòùÀÈÌÒÙ")
+        def _to_accent(m: re.Match) -> str:  # noqa: E306
+            return m.group(1).translate(_GRAVE)
+        smoothed = re.sub(
+            r"([aeiouAEIOU])'(?=[\s,;:.!?\"\[\]]|$)",
+            _to_accent,
+            smoothed,
+            flags=re.MULTILINE,
+        )
     # Guillemet quotes — mark boundaries so the audio generator can apply a
     # different voice effect to quoted speech.  A comma before __QSTART__ gives
     # the natural breath pause before the quote begins; __QEND__ is silent.
@@ -544,7 +560,7 @@ def build_liturgy_segments(description: str, lang: str = "it") -> list[str]:
         pope_intro = pre_comment_meta.replace(" - ", ", ")
         if not re.search(r"\b(papa|pope|pape|papst)\b", pope_intro, re.IGNORECASE):
             pope_intro = f"{pope_title} {pope_intro}"
-        comment_section = f"{comment_word} {pope_intro}."
+        comment_section = f"__POPE__ {comment_word} {pope_intro}."
         # Normalise the raw comment content for TTS
         comment_content = normalize_for_tts(pre_comment_content_raw, lang=lang) if pre_comment_content_raw else ""
         if comment_content:

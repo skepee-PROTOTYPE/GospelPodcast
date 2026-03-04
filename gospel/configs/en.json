@@ -3,7 +3,7 @@
   "feed_url": "https://www.vaticannews.va/en/word-of-the-day.rss.xml",
   "bucket_name": "gospelpodcast-87c74.firebasestorage.app",
   "storage_prefix": "gospel/en",
-  "voice_key": "en-female",
+  "voice_key": "en-US-Neural2-D",
   "podcast_info": {
     "title": "Daily Gospel (English)",
     "author": "Vatican News",

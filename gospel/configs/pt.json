@@ -3,7 +3,7 @@
   "feed_url": "https://www.vaticannews.va/pt/palavra-do-dia.rss.xml",
   "bucket_name": "gospelpodcast-87c74.firebasestorage.app",
   "storage_prefix": "gospel/pt",
-  "voice_key": "pt-female",
+  "voice_key": "pt-PT-Neural2-C",
   "podcast_info": {
     "title": "Evangelho Diário (Português)",
     "author": "Vatican News",
