@@ -338,8 +338,8 @@ def _smooth_for_tts(text: str, language: str = "it", flatten_lines: bool = True)
         smoothed = re.sub(r"\s*\n\s*", " ", smoothed)
     else:
         smoothed = re.sub(r"\s*\n\s*", "\n", smoothed)
-    # Remove dots that end a word/sentence to avoid TTS sentence-boundary pauses
-    smoothed = re.sub(r"\.(?=\s|$)", "", smoothed)
+    # NOTE: periods are intentionally kept — Cloud TTS Neural2 uses them for natural
+    # sentence-boundary pauses. Explicit <break> tags are added in _escape_and_mark.
     # Semicolons — replace with __PAUSE__ so the audio generator inserts real silence
     # Use [ \t]* (not \s*) to preserve newlines at line/section boundaries.
     smoothed = re.sub(r"[ \t]*;[ \t]*", " __PAUSE__ ", smoothed)
@@ -347,6 +347,7 @@ def _smooth_for_tts(text: str, language: str = "it", flatten_lines: bool = True)
     # boundaries when flatten_lines=False and must be preserved).
     smoothed = re.sub(r"[ \t]{2,}", " ", smoothed)
     return smoothed.strip()
+
 
 
 # Keep old name as an alias so any external callers are not broken.

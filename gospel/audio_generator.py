@@ -22,7 +22,7 @@ _VOICES: Dict[str, str] = {
     "de": "de-DE-Neural2-B",
     "fr": "fr-FR-Neural2-B",
     "es": "es-ES-Neural2-B",
-    "pt": "pt-PT-Neural2-C",
+    "pt": "pt-BR-Neural2-B",
 }
 
 _LANG_BCP47: Dict[str, str] = {
@@ -31,7 +31,7 @@ _LANG_BCP47: Dict[str, str] = {
     "de": "de-DE",
     "fr": "fr-FR",
     "es": "es-ES",
-    "pt": "pt-PT",
+    "pt": "pt-BR",
 }
 
 
@@ -72,6 +72,11 @@ def _apply_phonemes(text: str, lang: str) -> str:
 
 
 
+def _strip_xml_illegal(text: str) -> str:
+    """Remove characters that are illegal in XML 1.0 (control chars except tab/LF/CR)."""
+    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", text)
+
+
 def _escape_and_mark(text: str) -> str:
     """HTML-escape plain text and replace audio markers with SSML tags.
 
@@ -79,11 +84,34 @@ def _escape_and_mark(text: str) -> str:
       __PAUSE__  -> short break (semicolon pause)
       __QSTART__ -> open prosody for scripture guillemet quote (deeper pitch)
       __QEND__   -> close prosody
+    Also adds explicit break tags after sentence-ending punctuation and commas
+    to ensure Neural2 breathes naturally.
+
+    NOTE: Do NOT use this for text that will be wrapped in <emphasis> or other
+    structural tags — use _escape_header() instead, which skips break injection.
     """
-    safe = html.escape(text)
+    safe = html.escape(_strip_xml_illegal(text))
     safe = safe.replace("__PAUSE__",  f'<break time="{_PAUSE_DURATION_S}s"/>')
     safe = safe.replace("__QSTART__", '<prosody pitch="-5%">')
     safe = safe.replace("__QEND__",   "</prosody>")
+    # Add explicit pauses for punctuation so Neural2 breathes naturally.
+    # Period / ! / ? at sentence end → 500 ms pause.
+    safe = re.sub(r'([.!?])(?=\s)', r'\1<break time="500ms"/>', safe)
+    # Comma → short breath pause.
+    safe = re.sub(r',(?=\s)', ',<break time="150ms"/>', safe)
+    return safe
+
+
+def _escape_header(text: str) -> str:
+    """HTML-escape text for use inside structural SSML tags like <emphasis>.
+
+    Intentionally does NOT inject <break> tags — those are invalid inside
+    <emphasis> and will cause a 400 from Neural2 voices.
+    """
+    safe = html.escape(_strip_xml_illegal(text))
+    safe = safe.replace("__PAUSE__",  f'<break time="{_PAUSE_DURATION_S}s"/>')
+    safe = safe.replace("__QSTART__", "")
+    safe = safe.replace("__QEND__",   "")
     return safe
 
 
@@ -110,7 +138,7 @@ def _section_to_ssml(segment: str) -> str:
 
     if header_raw:
         parts.append(
-            f'<emphasis level="moderate">{_escape_and_mark(header_raw)}</emphasis>'
+            f'<emphasis level="moderate">{_escape_header(header_raw)}</emphasis>'
         )
         if body_raw:
             parts.append('<break time="0.4s"/>')
@@ -131,7 +159,7 @@ def _build_episode_ssml(title: str, segments: list[str], lang: str = "it") -> st
     # Title with stronger emphasis
     title_ssml = (
         f'<emphasis level="strong">'
-        f'{_escape_and_mark(re.sub(r"[ \t]*\n[ \t]*", " ", title).strip())}'
+        f'{_escape_header(re.sub(r"[ \t]*\n[ \t]*", " ", title).strip())}'
         f'</emphasis>'
     )
     parts = [title_ssml]
@@ -289,7 +317,7 @@ class AudioGenerator:
                     # title as first part, then each segment
                     title_ssml = _apply_phonemes(
                         f'<speak><emphasis level="strong">'
-                        f'{_escape_and_mark(title_text)}'
+                        f'{_escape_header(title_text)}'
                         f'</emphasis></speak>',
                         self.lang,
                     )
