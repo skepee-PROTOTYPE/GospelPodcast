@@ -121,18 +121,31 @@ def _section_to_ssml(segment: str) -> str:
     Segments may be prefixed with ``__POPE__`` to signal they contain the
     pope's comment — these receive a distinct lower-pitch rendering.
 
-    The *first line* of every segment is treated as the section header
-    (e.g. "Dal Vangelo secondo Marco") and wrapped in ``<emphasis>``; the
-    remaining body text is rendered normally (or with pope prosody).
+    The *first line* is the section label (e.g. "Prima Lettura") wrapped in
+    ``<emphasis>``.  If the *second line* is a short book-attribution with no
+    sentence punctuation (e.g. "Dal libro della Gènesi"), it is also rendered
+    in ``<emphasis>`` as a sub-header, followed by a longer pause before the
+    reading body begins.  Otherwise only the first line is the header.
     """
     is_pope = segment.startswith("__POPE__")
     text = segment[len("__POPE__"):].strip() if is_pope else segment.strip()
 
-    # Normalise internal newlines, then split header from body
+    # Normalise internal newlines
     text = re.sub(r"[ \t]*\n[ \t]*", "\n", text)
-    split = text.split("\n", 1)
-    header_raw = split[0].strip()
-    body_raw   = re.sub(r"\s*\n\s*", " ", split[1]).strip() if len(split) > 1 else ""
+    lines = text.split("\n")
+
+    header_raw = lines[0].strip() if lines else ""
+
+    # Detect a sub-header: second line is short and contains no sentence punctuation
+    sub_header_raw = ""
+    body_start = 1
+    if len(lines) >= 2:
+        second = lines[1].strip()
+        if second and len(second) < 60 and not re.search(r'[.!?:,]', second):
+            sub_header_raw = second
+            body_start = 2
+
+    body_raw = re.sub(r"\s*\n\s*", " ", "\n".join(lines[body_start:])).strip()
 
     parts: list[str] = []
 
@@ -140,10 +153,17 @@ def _section_to_ssml(segment: str) -> str:
         parts.append(
             f'<emphasis level="moderate">{_escape_header(header_raw)}</emphasis>'
         )
-        if body_raw:
-            parts.append('<break time="0.4s"/>')
+
+    if sub_header_raw:
+        # Short breath between section label and book attribution
+        parts.append('<break time="0.3s"/>')
+        parts.append(
+            f'<emphasis level="moderate">{_escape_header(sub_header_raw)}</emphasis>'
+        )
 
     if body_raw:
+        # Longer pause after header(s) to signal the reading is starting
+        parts.append('<break time="0.7s"/>')
         body_ssml = _escape_and_mark(body_raw)
         if is_pope:
             # Pope's reflection — slightly slower and deeper for distinction
@@ -188,6 +208,68 @@ def _synthesize(ssml: str, voice_name: str, language_code: str,
         ),
     )
     return response.audio_content
+
+
+def _synth_segment_safe(ssml: str, voice_name: str, language_code: str,
+                        speaking_rate: float, ffmpeg: Optional[str],
+                        tmp_dir: str, part_name: str) -> str:
+    """Synthesize one segment SSML to an MP3 file, chunking if needed.
+
+    When the SSML fits within the Cloud TTS byte limit a single API call is
+    made.  If not, the inner text is split at sentence boundaries and each
+    chunk is synthesised separately, then concatenated via ffmpeg.
+
+    Returns the path to the resulting MP3 file.
+    """
+    out_path = os.path.join(tmp_dir, f"{part_name}.mp3")
+
+    if len(ssml.encode("utf-8")) <= _SSML_BYTE_LIMIT or not ffmpeg:
+        with open(out_path, "wb") as f:
+            f.write(_synthesize(ssml, voice_name, language_code, speaking_rate))
+        return out_path
+
+    # Extract inner SSML content between <speak> … </speak>
+    inner_match = re.match(r"<speak>(.*)</speak>", ssml, re.DOTALL)
+    inner = inner_match.group(1) if inner_match else ssml
+
+    # Split on SSML <break> tags (sentence/clause boundaries already inserted by
+    # _escape_and_mark). Splitting here avoids breaking mid-tag and respects the
+    # natural pause points already in the SSML.
+    _break_re = re.compile(r'(<break\s+time="[^"]*"\s*/>)', re.IGNORECASE)
+    # tokenise into [text, break, text, break, …]
+    tokens = _break_re.split(inner)
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_bytes = len("<speak></speak>".encode("utf-8"))
+
+    for token in tokens:
+        t_bytes = len(token.encode("utf-8"))
+        if current and current_bytes + t_bytes > _SSML_BYTE_LIMIT:
+            chunks.append("<speak>" + "".join(current) + "</speak>")
+            current = [token]
+            current_bytes = len("<speak></speak>".encode("utf-8")) + t_bytes
+        else:
+            current.append(token)
+            current_bytes += t_bytes
+
+    if current:
+        chunks.append("<speak>" + "".join(current) + "</speak>")
+
+    if len(chunks) == 1:
+        with open(out_path, "wb") as f:
+            f.write(_synthesize(chunks[0], voice_name, language_code, speaking_rate))
+        return out_path
+
+    chunk_paths: list[str] = []
+    for ci, chunk_ssml in enumerate(chunks):
+        cp = os.path.join(tmp_dir, f"{part_name}_chunk{ci}.mp3")
+        with open(cp, "wb") as f:
+            f.write(_synthesize(chunk_ssml, voice_name, language_code, speaking_rate))
+        chunk_paths.append(cp)
+
+    _concat_mp3s(chunk_paths, out_path, ffmpeg)
+    return out_path
 
 
 # -- ffmpeg helpers ------------------------------------------------------------
@@ -322,17 +404,19 @@ class AudioGenerator:
                         self.lang,
                     )
                     interleaved: List[str] = []
-                    title_path = os.path.join(tmp_dir, "part_title.mp3")
-                    with open(title_path, "wb") as f:
-                        f.write(self._synth(title_ssml))
+                    title_path = _synth_segment_safe(
+                        title_ssml, self.voice_name, self.language_code,
+                        self.speaking_rate, ffmpeg, tmp_dir, "part_title",
+                    )
                     interleaved.append(title_path)
                     for idx, seg in enumerate(segments):
                         ssml = _apply_phonemes(
                             f"<speak>{_section_to_ssml(seg)}</speak>", self.lang
                         )
-                        p = os.path.join(tmp_dir, f"part_{idx}.mp3")
-                        with open(p, "wb") as f:
-                            f.write(self._synth(ssml))
+                        p = _synth_segment_safe(
+                            ssml, self.voice_name, self.language_code,
+                            self.speaking_rate, ffmpeg, tmp_dir, f"part_{idx}",
+                        )
                         interleaved.append(silence_path)
                         interleaved.append(p)
 

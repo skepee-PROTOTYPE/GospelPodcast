@@ -221,6 +221,28 @@ VERSE_RANGE_WORDS: dict[str, str] = {
     "de": "bis",
 }
 
+# Phrases that mark the end of the gospel reading and the start of the pope comment.
+# Used for flat-text feeds that have no newlines between sections.
+GOSPEL_CLOSING_PATTERNS: dict[str, str] = {
+    "it": r"parola\s+del\s+(vangelo|signore)\b",
+    "en": r"(the\s+)?gospel\s+of\s+the\s+lord\b",
+    "fr": r"parole\s+du\s+seigneur\b",
+    "es": r"palabra\s+del\s+se[ñn]or\b",
+    "pt": r"palavra\s+d[ao]\s+salva[cç][aã]o\b|palavra\s+do\s+senhor\b",
+    "de": r"wort\s+des\s+herrn\b",
+}
+
+# Opening phrases that typically begin a pope comment/reflection block.
+# Used as a secondary heuristic when the gospel closing phrase is absent.
+POPE_COMMENT_INTRO_PATTERNS: dict[str, str] = {
+    "it": r"\bfratelli\s+e\s+sorelle\b|\bcari\s+amici\b",
+    "en": r"\bdear\s+brothers\s+and\s+sisters\b",
+    "fr": r"\bchers\s+fr[eè]res\s+et\s+s[oœ]urs\b",
+    "es": r"\bqueridos\s+hermanos\s+y\s+hermanas\b",
+    "pt": r"\birm[aã]os\s+e\s+irm[aã]s\b|\bcaros\s+irm[aã]os\b",
+    "de": r"\bliebe\s+br[üu]der\s+und\s+schwestern\b",
+}
+
 
 def _detect_lang(lang: Optional[str], feed_url: Optional[str]) -> Optional[str]:
     lang_value = (lang or "").strip().lower()
@@ -463,8 +485,6 @@ def _extract_pope_meta(line: str) -> tuple[str, Optional[str]]:
 
     meta = match.group(1).strip()
     content = stripped[:match.start()].strip()
-    if not content:
-        content = stripped
 
     # Multi-language pope name / title detection
     if re.search(
@@ -476,9 +496,236 @@ def _extract_pope_meta(line: str) -> tuple[str, Optional[str]]:
         meta,
         re.IGNORECASE,
     ):
+        # Return only the body text (may be empty when the line is the attribution alone)
         return content, meta
 
     return stripped, None
+
+
+# ---------------------------------------------------------------------------
+# Section-header helpers
+# ---------------------------------------------------------------------------
+
+def _strip_verse_refs_from_header(line: str, language: str = "it") -> str:
+    """Strip trailing chapter/verse numbers from a reading section header line.
+
+    After normalize_verse_refs() verse refs look like "1 1 a 13" or just "26".
+    These are stripped from the END of the header so TTS announces only the
+    book name (e.g. "dal libro della Genesi") without reading out the numbers.
+    """
+    range_word = re.escape(VERSE_RANGE_WORDS.get(language, "to"))
+    # Full range: e.g. "1 1 a 13" or "10 46 à 52"
+    line = re.sub(
+        rf'\s+\d+\s+\d+\s+{range_word}\s+\d+\s*$', '', line, flags=re.IGNORECASE
+    ).strip()
+    # Chapter + verse only: e.g. "10 1"
+    line = re.sub(r'\s+\d+\s+\d+\s*$', '', line).strip()
+    # Just chapter/single number: e.g. "26"
+    line = re.sub(r'\s+\d+\s*$', '', line).strip()
+    return line
+
+
+def _strip_section_verse_refs(section_text: str, language: str) -> str:
+    """Apply verse-ref stripping to the first two lines of a section block.
+
+    The first line is the section label ("Prima lettura") and the second is
+    the book-source line ("Dal libro della Genesi 1 1 a 13").  Stripping
+    trailing numbers from both ensures TTS only announces the book name.
+    Lines that are purely an abbreviated book+verse reference (e.g. "Gn 37,3-4"
+    or "Mt 21 33 a 43") are dropped entirely — they carry no speakable content.
+    """
+    # Lines that are purely a book reference (abbreviation or full name + verse
+    # numbers) should be dropped — they carry no speakable content beyond
+    # what the book-source header line already announced.
+    #   Pattern A: short abbreviation, e.g. "Gn 37,3-4" or just "Gn"
+    #   Pattern B: full capitalized book name (1-2 words) + verse numbers,
+    #              e.g. "Matteo 21 33 a 43. 45-46" or "Giovanni Paolo 2 4"
+    _abbrev_ref_re = re.compile(
+        r"^[A-ZÀ-Ü][a-zà-ü]{0,4}(?:\s+\d[\d\s,;.:\-a-zA-Z]*)?\s*$"
+        r"|"
+        r"^[A-ZÀ-Ü][a-zà-ü]+(?:\s+[A-ZÀ-Ü][a-zà-ü]+)?\s+\d[\d\s,;.:\-a-zA-Z]*\s*$"
+    )
+    sec_lines = section_text.split("\n")
+    # Strip trailing verse numbers from first two header lines
+    for i in range(min(2, len(sec_lines))):
+        sec_lines[i] = _strip_verse_refs_from_header(sec_lines[i], language)
+    # Drop any of the first 4 lines that are purely abbreviated references
+    cleaned: list[str] = []
+    for i, line in enumerate(sec_lines):
+        if i < 4 and line.strip() and _abbrev_ref_re.match(line.strip()):
+            continue  # skip standalone abbreviated ref line
+        cleaned.append(line)
+    return "\n".join(cleaned).strip()
+
+
+# ---------------------------------------------------------------------------
+# Position-based section detection (for flat/single-paragraph feed texts)
+# ---------------------------------------------------------------------------
+
+def _find_inline_pos(text: str, pattern: str) -> int:
+    """Find the start position of a section header pattern within flat text.
+
+    Section patterns often use ``^`` anchors designed for line-start matching.
+    This function tries each ``|``-separated alternative from left to right,
+    preferring unanchored ones first, so that the globally-unique specific
+    phrase (e.g. "dal vangelo" or "proclamação do evangelho") is matched before
+    falling back to the more generic stripped-anchor version.
+
+    Returns the character offset of the first match, or -1 if not found.
+    """
+    alts = pattern.split("|")
+    # First pass: try alternatives that have NO leading ^ (already inline-safe)
+    for alt in alts:
+        if not alt.startswith("^"):
+            m = re.search(alt, text, re.IGNORECASE)
+            if m:
+                return m.start()
+    # Second pass: strip ^ from anchored alternatives and retry
+    for alt in alts:
+        if alt.startswith("^"):
+            m = re.search(alt.lstrip("^"), text, re.IGNORECASE)
+            if m:
+                return m.start()
+    return -1
+
+
+def _strip_attribution_tail(text: str, meta: Optional[str], lang: str) -> str:
+    """Remove the normalised pope attribution from the tail of pope-body text.
+
+    After normalisation the parentheses in "(Papa Francesco, Angelus 2019)"
+    are stripped, leaving the attribution text embedded at the end of the
+    flat string.  This function finds and removes it so TTS does not read the
+    attribution twice (it is announced separately in the segment header).
+    """
+    if not meta or not text:
+        return text
+    norm_meta = normalize_for_tts(meta, lang=lang)
+    if norm_meta:
+        # Direct suffix match (most common case)
+        if text.endswith(norm_meta):
+            return text[: -len(norm_meta)].strip()
+        # Tolerate minor whitespace difference
+        idx = text.rfind(norm_meta[:20])  # match on first 20 chars of meta
+        if idx != -1:
+            return text[:idx].strip()
+    # Fallback: strip last occurrence of the first two words of the raw meta
+    first_words = (meta.strip().split())[:2]
+    if first_words:
+        pattern = re.escape(" ".join(first_words))
+        matches = list(re.finditer(rf'\b{pattern}\b', text, re.IGNORECASE))
+        if matches:
+            return text[: matches[-1].start()].strip()
+    return text
+
+
+def _build_segments_positional(
+    flat_text: str,
+    lang: str,
+    patterns: dict,
+    pre_comment_meta: Optional[str],
+) -> list[str]:
+    """Build liturgy segments from a single-paragraph (flat) text string.
+
+    Used as a fallback when line-based detection cannot find the section
+    headers (typically because the RSS feed provides the whole description
+    as one paragraph with no HTML line-breaks between sections).
+    """
+
+    def find_pos(key: str) -> int:
+        return _find_inline_pos(flat_text, patterns[key])
+
+    pos_prima   = find_pos("prima")
+    pos_seconda = find_pos("seconda")
+    pos_salmo   = find_pos("salmo")
+    pos_vangelo = find_pos("vangelo")
+
+    if pos_prima == -1 or pos_vangelo == -1:
+        return [flat_text]
+
+    has_comment = pre_comment_meta is not None
+    segments: list[str] = []
+
+    # --- First reading ---
+    # End boundary: seconda (if present and between prima/vangelo), then salmo,
+    # then vangelo.  All positions must be strictly between prima and vangelo.
+    if pos_seconda != -1 and pos_prima < pos_seconda < pos_vangelo:
+        prima_end = pos_seconda
+    elif pos_salmo != -1 and pos_prima < pos_salmo < pos_vangelo:
+        prima_end = pos_salmo
+    else:
+        prima_end = pos_vangelo
+    prima_section = _strip_section_verse_refs(flat_text[pos_prima:prima_end].strip(), lang)
+    if prima_section:
+        segments.append(prima_section)
+
+    # --- Second reading (optional) ---
+    if pos_seconda != -1 and pos_prima < pos_seconda < pos_vangelo:
+        if pos_salmo != -1 and pos_seconda < pos_salmo < pos_vangelo:
+            seconda_end = pos_salmo
+        else:
+            seconda_end = pos_vangelo
+        seconda_section = _strip_section_verse_refs(
+            flat_text[pos_seconda:seconda_end].strip(), lang
+        )
+        if seconda_section:
+            segments.append(seconda_section)
+
+    # --- Psalm is SKIPPED entirely ---
+
+    # --- Gospel (split from pope comment body if closing phrase found) ---
+    vangelo_raw = flat_text[pos_vangelo:]
+    pope_body   = ""
+    gospel_end  = len(vangelo_raw)  # default: no pope-body split
+
+    if has_comment:
+        closing_pat = GOSPEL_CLOSING_PATTERNS.get(lang)
+        intro_pat   = POPE_COMMENT_INTRO_PATTERNS.get(lang)
+
+        split_found = False
+        # 1st heuristic: explicit gospel closing phrase (e.g. "Palavra da Salvação")
+        if closing_pat:
+            m = re.search(closing_pat, vangelo_raw, re.IGNORECASE)
+            if m:
+                gospel_end  = m.end()
+                pope_body   = _strip_attribution_tail(
+                    re.sub(r'^[\s.,;:]+', '', vangelo_raw[gospel_end:]),
+                    pre_comment_meta, lang
+                )
+                split_found = True
+
+        # 2nd heuristic: pope-comment opening phrase (e.g. "Irmãos e irmãs")
+        if not split_found and intro_pat:
+            m = re.search(intro_pat, vangelo_raw, re.IGNORECASE)
+            if m:
+                gospel_end  = m.start()
+                pope_body   = _strip_attribution_tail(
+                    vangelo_raw[gospel_end:].strip(), pre_comment_meta, lang
+                )
+                split_found = True
+
+        # Fallback: no clean split — strip the attribution text from the end
+        # of the gospel section so it is not spoken by TTS inside the gospel.
+        if not split_found:
+            gospel_end = len(
+                _strip_attribution_tail(vangelo_raw, pre_comment_meta, lang)
+            )
+
+    vangelo_section = _strip_section_verse_refs(vangelo_raw[:gospel_end].strip(), lang)
+    if vangelo_section:
+        segments.append(vangelo_section)
+
+    # --- Pope's comment ---
+    if has_comment:
+        comment_word, pope_title = POPE_COMMENT_LABELS.get(lang, POPE_COMMENT_LABELS["it"])
+        pope_intro = pre_comment_meta.strip().replace(" - ", ", ")
+        if not re.search(r"\b(papa|pope|pape|papst)\b", pope_intro, re.IGNORECASE):
+            pope_intro = f"{pope_title} {pope_intro}"
+        comment_section = f"__POPE__ {comment_word} {pope_intro}."
+        if pope_body:
+            comment_section = f"{comment_section}\n{pope_body}"
+        segments.append(comment_section)
+
+    return segments if segments else [flat_text]
 
 
 def build_liturgy_segments(description: str, lang: str = "it") -> list[str]:
@@ -489,13 +736,26 @@ def build_liturgy_segments(description: str, lang: str = "it") -> list[str]:
     Returns a list of normalised text strings to be read aloud with silence
     inserted between them by the audio generator.
     If no structure is detected the full text is returned as a single segment.
+
+    Strategy
+    --------
+    1. Line-based detection: works when the RSS feed provides HTML line-breaks
+       (``<br>`` / ``<p>``) that ``html_to_plain_text`` converts to ``\\n``.
+    2. Positional fallback: used when the feed sends a single flat paragraph
+       with no line-breaks.  Patterns are de-anchored (``^`` removed) so they
+       can match anywhere in the text string.
     """
     # --- Extract pope comment attribution BEFORE normalisation strips parentheses ---
-    # The description arrives with parentheses intact (html_to_plain_text only);
-    # normalize_for_tts (called below) removes them via _smooth_for_tts.
-    raw_lines = [l.strip() for l in description.splitlines() if l.strip()]
-    raw_last = raw_lines[-1] if raw_lines else description.strip()
-    pre_comment_content_raw, pre_comment_meta = _extract_pope_meta(raw_last)
+    # We use html_to_plain_text (which removes HTML tags like </p>) but NOT
+    # normalize_for_tts (which would strip the parentheses we need).
+    # For HTML-rich feeds the raw last line ends with </i></p> after the closing
+    # ")" so the regex would fail on the raw HTML; the plain-text last line has
+    # the attribution cleanly at the end (no trailing HTML tags).
+    # For flat-text feeds (no HTML at all) both approaches are equivalent.
+    plain_for_meta = html_to_plain_text(description)
+    plain_meta_lines = [l.strip() for l in plain_for_meta.splitlines() if l.strip()]
+    plain_meta_last  = plain_meta_lines[-1] if plain_meta_lines else plain_for_meta.strip()
+    pre_comment_content_raw, pre_comment_meta = _extract_pope_meta(plain_meta_last)
 
     text = normalize_for_tts(description, lang=lang, flatten_lines=False)
     lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -514,10 +774,16 @@ def build_liturgy_segments(description: str, lang: str = "it") -> list[str]:
     idx_salmo   = find("salmo")
     idx_vangelo = find("vangelo")
 
-    has_comment = pre_comment_meta is not None and idx_vangelo != -1
+    # --- Positional fallback for flat (single-paragraph) feeds ---
+    # Triggered when a section is not found (idx = -1) OR when prima and
+    # vangelo land on the same line — which happens with flat text because an
+    # unanchored alternative (e.g. "dal\s+vangelo") matches anywhere in the
+    # single-line text while the prima anchor still fires at position 0.
+    if idx_prima == -1 or idx_vangelo == -1 or idx_prima >= idx_vangelo:
+        flat_text = " ".join(lines)
+        return _build_segments_positional(flat_text, lang, patterns, pre_comment_meta)
 
-    if idx_prima == -1 or idx_vangelo == -1:
-        return [text]
+    has_comment = pre_comment_meta is not None and idx_vangelo != -1
 
     segments: list[str] = []
 
@@ -528,7 +794,9 @@ def build_liturgy_segments(description: str, lang: str = "it") -> list[str]:
         prima_end = idx_salmo
     else:
         prima_end = idx_vangelo
-    prima_section = "\n".join(lines[idx_prima:prima_end]).strip()
+    prima_section = _strip_section_verse_refs(
+        "\n".join(lines[idx_prima:prima_end]).strip(), lang
+    )
     if prima_section:
         segments.append(prima_section)
 
@@ -538,7 +806,9 @@ def build_liturgy_segments(description: str, lang: str = "it") -> list[str]:
             seconda_end = idx_salmo
         else:
             seconda_end = idx_vangelo
-        seconda_section = "\n".join(lines[idx_seconda:seconda_end]).strip()
+        seconda_section = _strip_section_verse_refs(
+            "\n".join(lines[idx_seconda:seconda_end]).strip(), lang
+        )
         if seconda_section:
             segments.append(seconda_section)
 
@@ -546,12 +816,13 @@ def build_liturgy_segments(description: str, lang: str = "it") -> list[str]:
 
     # --- Gospel ---
     vangelo_end = len(lines) - 1 if has_comment else len(lines)
-    vangelo_section = "\n".join(lines[idx_vangelo:vangelo_end]).strip()
+    vangelo_text = "\n".join(lines[idx_vangelo:vangelo_end]).strip()
     # For Italian feeds narrow to the actual gospel text after the header line
     if lang == "it":
-        vangelo_match = re.search(r"dal\s+vangelo.*", vangelo_section, re.IGNORECASE | re.DOTALL)
+        vangelo_match = re.search(r"dal\s+vangelo.*", vangelo_text, re.IGNORECASE | re.DOTALL)
         if vangelo_match:
-            vangelo_section = vangelo_match.group(0).strip()
+            vangelo_text = vangelo_match.group(0).strip()
+    vangelo_section = _strip_section_verse_refs(vangelo_text, lang)
     if vangelo_section:
         segments.append(vangelo_section)
 
