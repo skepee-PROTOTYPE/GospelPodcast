@@ -50,17 +50,32 @@ def generate_for_language(lang: str, out_dir: str, speed: str) -> Dict:
     if not feed_url or 'TODO' in feed_url:
         return {'lang': lang, 'ok': False, 'error': 'missing feed_url in config'}
 
-    rss = GospelRSSClient(feed_url)
-    latest = rss.fetch_latest()
-    if not latest:
-        return {'lang': lang, 'ok': False, 'error': 'no rss entry found'}
-
-    title = latest.get('title') or f'Daily Gospel {lang.upper()}'
-    description = latest.get('summary') or title
     voice_key = cfg.get('voice_key', f'{lang}-female')
-
     audio_gen = AudioGenerator(voice=voice_key, speed=speed)
-    episode = audio_gen.create_podcast_episode(title, description)
+
+    # --- Attempt 1: fetch structured content from the Vatican News HTML page ---
+    title = description = ""
+    episode = None
+    try:
+        from gospel.html_scraper import VaticanHTMLScraper
+        scraper = VaticanHTMLScraper(lang)
+        title, segments = scraper.fetch_segments()
+        episode = audio_gen.create_episode_from_segments(title, segments)
+        description = title
+    except Exception as scraper_err:
+        print(f"  [{lang}] HTML scraper failed ({scraper_err}), falling back to RSS...")
+
+    # --- Fallback: use the RSS feed ---
+    if episode is None:
+        rss = GospelRSSClient(feed_url)
+        latest = rss.fetch_latest()
+        if not latest:
+            return {'lang': lang, 'ok': False, 'error': 'no rss entry found'}
+
+        title = latest.get('title') or f'Daily Gospel {lang.upper()}'
+        description = latest.get('summary') or title
+
+        episode = audio_gen.create_podcast_episode(title, description)
 
     stamp = datetime.now().strftime('%Y%m%d')
     file_name = f"{stamp}_{lang}_{slugify(title)}.mp3"

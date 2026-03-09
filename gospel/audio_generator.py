@@ -92,13 +92,14 @@ def _escape_and_mark(text: str) -> str:
     """
     safe = html.escape(_strip_xml_illegal(text))
     safe = safe.replace("__PAUSE__",  f'<break time="{_PAUSE_DURATION_S}s"/>')
-    safe = safe.replace("__QSTART__", '<prosody pitch="-5%">')
-    safe = safe.replace("__QEND__",   "</prosody>")
-    # Add explicit pauses for punctuation so Neural2 breathes naturally.
-    # Period / ! / ? at sentence end → 500 ms pause.
-    safe = re.sub(r'([.!?])(?=\s)', r'\1<break time="500ms"/>', safe)
-    # Comma → short breath pause.
-    safe = re.sub(r',(?=\s)', ',<break time="150ms"/>', safe)
+    safe = safe.replace("__QSTART__", '<break time="200ms"/><prosody pitch="-6%" rate="97%">')
+    safe = safe.replace("__QEND__",   '</prosody><break time="150ms"/>')
+    # Neural2 voices already handle commas and sentence-ending punctuation
+    # with natural pauses.  Adding explicit <break> tags at every comma
+    # causes unnatural double-pauses mid-sentence.  We only add a modest
+    # break at true sentence boundaries (period / ! / ?) so the listener
+    # clearly hears the end of each sentence.
+    safe = re.sub(r'([.!?])(?=\s)', r'\1<break time="300ms"/>', safe)
     return safe
 
 
@@ -156,14 +157,14 @@ def _section_to_ssml(segment: str) -> str:
 
     if sub_header_raw:
         # Short breath between section label and book attribution
-        parts.append('<break time="0.3s"/>')
+        parts.append('<break time="0.5s"/>')
         parts.append(
             f'<emphasis level="moderate">{_escape_header(sub_header_raw)}</emphasis>'
         )
 
     if body_raw:
         # Longer pause after header(s) to signal the reading is starting
-        parts.append('<break time="0.7s"/>')
+        parts.append('<break time="1.0s"/>')
         body_ssml = _escape_and_mark(body_raw)
         if is_pope:
             # Pope's reflection — slightly slower and deeper for distinction
@@ -415,6 +416,70 @@ class AudioGenerator:
                     _generate_silence(silence_path, ffmpeg, SECTION_SILENCE_S)
 
                     # title as first part, then each segment
+                    title_ssml = _apply_phonemes(
+                        f'<speak><emphasis level="strong">'
+                        f'{_escape_header(title_text)}'
+                        f'</emphasis></speak>',
+                        self.lang,
+                    )
+                    interleaved: List[str] = []
+                    title_path = _synth_segment_safe(
+                        title_ssml, self.voice_name, self.language_code,
+                        self.speaking_rate, ffmpeg, tmp_dir, "part_title",
+                    )
+                    interleaved.append(title_path)
+                    for idx, seg in enumerate(segments):
+                        ssml = _apply_phonemes(
+                            f"<speak>{_section_to_ssml(seg)}</speak>", self.lang
+                        )
+                        p = _synth_segment_safe(
+                            ssml, self.voice_name, self.language_code,
+                            self.speaking_rate, ffmpeg, tmp_dir, f"part_{idx}",
+                        )
+                        interleaved.append(silence_path)
+                        interleaved.append(p)
+
+                    _concat_mp3s(interleaved, final_mp3, ffmpeg)
+                finally:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        ffmpeg = _ffmpeg_bin()
+        duration = _probe_duration(final_mp3, ffmpeg) if ffmpeg else 0
+        return {
+            "audio_path": final_mp3,
+            "duration":   duration,
+            "filename":   os.path.basename(final_mp3),
+        }
+
+    def create_episode_from_segments(self, title: str, segments: list[str]) -> Dict:
+        """Create an MP3 episode from a title and pre-built liturgy segments.
+
+        Same synthesis pipeline as :py:meth:`create_podcast_episode` but skips
+        the ``build_liturgy_segments`` step — useful when segments are produced
+        by an alternative source such as
+        :py:class:`~gospel.html_scraper.VaticanHTMLScraper`.
+        """
+        dt = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base = f"{dt}_{_slugify(title) or 'gospel'}"
+        final_mp3 = os.path.join(self.out_dir, f"{base}.mp3")
+
+        title_text = normalize_for_tts(title, lang=self.lang)
+        full_ssml  = _build_episode_ssml(title_text, segments, lang=self.lang)
+
+        if len(full_ssml.encode("utf-8")) <= _SSML_BYTE_LIMIT:
+            with open(final_mp3, "wb") as f:
+                f.write(self._synth(full_ssml))
+        else:
+            ffmpeg = _ffmpeg_bin()
+            if not ffmpeg:
+                with open(final_mp3, "wb") as f:
+                    f.write(self._synth(full_ssml))
+            else:
+                tmp_dir = tempfile.mkdtemp()
+                try:
+                    silence_path = os.path.join(tmp_dir, "silence.mp3")
+                    _generate_silence(silence_path, ffmpeg, SECTION_SILENCE_S)
+
                     title_ssml = _apply_phonemes(
                         f'<speak><emphasis level="strong">'
                         f'{_escape_header(title_text)}'

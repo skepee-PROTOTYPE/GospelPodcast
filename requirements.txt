@@ -2,3 +2,5 @@ feedparser>=6.0.10          # RSS parsing
 firebase-admin>=6.0.0       # Firebase Admin SDK
 google-cloud-texttospeech>=2.17.0  # Text-to-Speech (Neural2)
 pydub>=0.25.1               # Audio duration parsing
+requests>=2.31.0            # HTTP client for HTML scraper
+beautifulsoup4>=4.12.0      # HTML parser for Vatican News pages

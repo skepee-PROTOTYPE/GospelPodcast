@@ -343,13 +343,27 @@ def _smooth_for_tts(text: str, language: str = "it", flatten_lines: bool = True)
             smoothed,
             flags=re.MULTILINE,
         )
-    # Guillemet quotes — mark boundaries so the audio generator can apply a
-    # different voice effect to quoted speech.  A comma before __QSTART__ gives
-    # the natural breath pause before the quote begins; __QEND__ is silent.
+    # Guillemet quotes « » AND straight double quotes " " — mark boundaries so
+    # the audio generator applies a different pitch/rate to quoted speech.
+    # A brief pause before __QSTART__ lets the listener hear the transition.
     # Use [ \t]* (not \s*) to avoid consuming newlines and collapsing section
     # headers onto adjacent lines when flatten_lines=False.
-    smoothed = re.sub(r"[ \t]*«[ \t]*", ", __QSTART__ ", smoothed)
+    smoothed = re.sub(r"[ \t]*«[ \t]*", " __QSTART__ ", smoothed)
     smoothed = re.sub(r"[ \t]*»[ \t]*", " __QEND__ ", smoothed)
+    # Straight double-quotes (Unicode " " and ASCII ") used for direct speech.
+    # Open quote → __QSTART__, closing quote → __QEND__.
+    # We treat an opening quote as one that follows whitespace / start-of-line
+    # or a punctuation marker, and a closing quote as one that precedes
+    # whitespace, punctuation or end-of-line.
+    smoothed = re.sub(r"\u201c", " __QSTART__ ", smoothed)   # U+201C "
+    smoothed = re.sub(r"\u201d", " __QEND__ ", smoothed)     # U+201D "
+    # ASCII double-quote heuristic: use sentence context.
+    # Opening: at start of string/line, OR after space/newline/punctuation
+    smoothed = re.sub(r'^"(?=\S)', "__QSTART__ ", smoothed, flags=re.MULTILINE)
+    smoothed = re.sub(r'(?<=[\s,\-])"(?=\S)', " __QSTART__ ", smoothed)
+    # Closing: before whitespace/punctuation/EOL, after any character (incl. space)
+    # This covers: `."`, `. "`, and `"` at end of line.
+    smoothed = re.sub(r'"(?=\s*(?:[,;:.!?]|\s|$))', " __QEND__ ", smoothed, flags=re.MULTILINE)
     # Colons that are NOT at end of line/segment — replace with comma
     smoothed = re.sub(r":(?!\s*$)", ",", smoothed, flags=re.MULTILINE)
     # Parentheses — remove (they wrap references or metadata the reader trips over)
@@ -492,7 +506,7 @@ def _extract_pope_meta(line: str) -> tuple[str, Optional[str]]:
     # Multi-language pope name / title detection
     if re.search(
         r"francesco|francis|fran[cç]ois|francisco|franziskus"
-        r"|benedetto|benedict|benedikt"
+        r"|benedetto|benoît|benoit|benedict|benedikt"
         r"|giovanni\s+paolo|john\s+paul|jean\s+paul|juan\s+pablo|jo[aã]o\s+paulo|johannes\s+paul"
         r"|paolo\s+vi|paul\s+vi|pablo\s+vi|paulo\s+vi"
         r"|papa|pope|pape|papst",
@@ -503,6 +517,56 @@ def _extract_pope_meta(line: str) -> tuple[str, Optional[str]]:
         return content, meta
 
     return stripped, None
+
+
+_POPE_NAME_RE = re.compile(
+    r"francesco|francis|fran[cç]ois|francisco|franziskus"
+    r"|benedetto|benoît|benoit|benedict|benedikt"
+    r"|giovanni\s+paolo|john\s+paul|jean\s+paul|juan\s+pablo|jo[aã]o\s+paulo|johannes\s+paul"
+    r"|paolo\s+vi|paul\s+vi|pablo\s+vi|paulo\s+vi"
+    r"|papa\b|pope\b|pape\b|papst\b",
+    re.IGNORECASE,
+)
+
+
+def _find_pope_attribution_in_lines(lines: list[str]) -> tuple[Optional[str], Optional[int]]:
+    """Scan all non-empty lines for a pope attribution in either format:
+
+    Format A: a line ending with ``(Pope Name, Event Date)``
+    Format B: a standalone line that IS just "Pope Name - Event, Date" with no
+              sentence content other than the attribution.
+
+    Returns ``(meta_string, line_index)`` or ``(None, None)`` if not found.
+    The caller should use ``line_index`` to split body vs. attribution.
+    """
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        # Format A: parenthesized attribution at line end
+        m = re.search(r"\(([^()]+)\)\s*$", stripped)
+        if m:
+            meta = m.group(1).strip()
+            if _POPE_NAME_RE.search(meta):
+                return meta, idx
+
+        # Format B: standalone attribution line — short, contains pope name,
+        # has event markers (year, angelus, homily keywords, dash separator).
+        # Must be short (< 100 chars) and contain no sentence body text.
+        if (
+            len(stripped) < 120
+            and _POPE_NAME_RE.search(stripped)
+            and re.search(
+                r"\d{4}"                                # has a year
+                r"|angelus|omelia|hom[eé]lie|homilía|homilia|predigt"
+                r"|udienza|audience|audiencia|audience|publikumsaudienz"
+                r"|meditazione|m[eé]ditation|meditación|meditação"
+                r"|catechesi|catchèse|catequesis|katechese"
+                r"|discorso|discourse|discours|discurso",
+                stripped, re.IGNORECASE,
+            )
+        ):
+            return stripped, idx
+
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -544,8 +608,12 @@ def _strip_section_verse_refs(section_text: str, language: str) -> str:
     #   Pattern B: full capitalized book name (1-2 words) + verse numbers,
     #              e.g. "Matteo 21 33 a 43. 45-46" or "Giovanni Paolo 2 4"
     _abbrev_ref_re = re.compile(
-        r"^[A-ZÀ-Ü][a-zà-ü]{0,4}(?:\s+\d[\d\s,;.:\-a-zA-Z]*)?\s*$"
+        # Pattern A: optional leading digit + abbreviated book name + optional verse numbers
+        # Matches: "Gn", "Gn 37,3-4", "2Re", "2Re 5,1-15a", "1Cor 5 1 a 10"
+        r"^(?:\d+\s*)?[A-ZÀ-Ü][a-zà-ü]{0,4}(?:\s+\d[\d\s,;.:\-a-zA-Z]*)?\s*$"
         r"|"
+        # Pattern B: full book name (1-2 capitalised words) + verse numbers
+        # Matches: "Matteo 21 33 a 43"
         r"^[A-ZÀ-Ü][a-zà-ü]+(?:\s+[A-ZÀ-Ü][a-zà-ü]+)?\s+\d[\d\s,;.:\-a-zA-Z]*\s*$"
     )
     sec_lines = section_text.split("\n")
@@ -757,8 +825,21 @@ def build_liturgy_segments(description: str, lang: str = "it") -> list[str]:
     # For flat-text feeds (no HTML at all) both approaches are equivalent.
     plain_for_meta = html_to_plain_text(description)
     plain_meta_lines = [l.strip() for l in plain_for_meta.splitlines() if l.strip()]
-    plain_meta_last  = plain_meta_lines[-1] if plain_meta_lines else plain_for_meta.strip()
+
+    # Primary: check last line for parenthesized attribution "(Pope, Event)"
+    plain_meta_last = plain_meta_lines[-1] if plain_meta_lines else plain_for_meta.strip()
     pre_comment_content_raw, pre_comment_meta = _extract_pope_meta(plain_meta_last)
+
+    # Fallback: scan ALL lines for standalone attribution line (no parentheses)
+    # This handles feeds that place "Benedetto XVI - Angelus, 8 luglio 2012"
+    # as a plain line followed by the pope speech body.
+    pre_comment_attr_line_idx: Optional[int] = None
+    if pre_comment_meta is None:
+        pre_comment_meta, pre_comment_attr_line_idx = _find_pope_attribution_in_lines(
+            plain_meta_lines
+        )
+        if pre_comment_attr_line_idx is not None:
+            pre_comment_content_raw = ""  # body comes after the attribution line
 
     text = normalize_for_tts(description, lang=lang, flatten_lines=False)
     lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -787,6 +868,16 @@ def build_liturgy_segments(description: str, lang: str = "it") -> list[str]:
         return _build_segments_positional(flat_text, lang, patterns, pre_comment_meta)
 
     has_comment = pre_comment_meta is not None and idx_vangelo != -1
+
+    # When attribution is a standalone line, locate it in the normalized lines
+    # so we know where the gospel ends and where the pope body starts.
+    # We look for the line containing the pope name after idx_vangelo.
+    idx_attribution = -1
+    if has_comment and pre_comment_attr_line_idx is not None:
+        for li in range(idx_vangelo + 1, len(lines)):
+            if _POPE_NAME_RE.search(lines[li]):
+                idx_attribution = li
+                break
 
     segments: list[str] = []
 
@@ -818,7 +909,17 @@ def build_liturgy_segments(description: str, lang: str = "it") -> list[str]:
     # --- Psalm is SKIPPED entirely ---
 
     # --- Gospel ---
-    vangelo_end = len(lines) - 1 if has_comment else len(lines)
+    # Determine where the gospel text ends:
+    #  - If attribution is a standalone line: ends at that line.
+    #  - If attribution was at end via parentheses (last line): ends at len-1.
+    #  - No comment: ends at len(lines).
+    if not has_comment:
+        vangelo_end = len(lines)
+    elif idx_attribution != -1:
+        vangelo_end = idx_attribution
+    else:
+        vangelo_end = len(lines) - 1
+
     vangelo_text = "\n".join(lines[idx_vangelo:vangelo_end]).strip()
     # For Italian feeds narrow to the actual gospel text after the header line
     if lang == "it":
@@ -836,8 +937,17 @@ def build_liturgy_segments(description: str, lang: str = "it") -> list[str]:
         if not re.search(r"\b(papa|pope|pape|papst)\b", pope_intro, re.IGNORECASE):
             pope_intro = f"{pope_title} {pope_intro}"
         comment_section = f"__POPE__ {comment_word} {pope_intro}."
-        # Normalise the raw comment content for TTS
-        comment_content = normalize_for_tts(pre_comment_content_raw, lang=lang) if pre_comment_content_raw else ""
+        # Collect the pope body text:
+        # - If attribution was a standalone line, the body is all lines after it.
+        # - Otherwise use the raw content extracted by _extract_pope_meta.
+        if idx_attribution != -1:
+            # Body is everything after the attribution line.
+            # These lines are already normalized — just join them.
+            pope_body_lines = lines[idx_attribution + 1:]
+            comment_content = " ".join(pope_body_lines).strip()
+        else:
+            # Normalise the raw comment content for TTS
+            comment_content = normalize_for_tts(pre_comment_content_raw, lang=lang) if pre_comment_content_raw else ""
         if comment_content:
             comment_section = f"{comment_section}\n{comment_content}"
         segments.append(comment_section)

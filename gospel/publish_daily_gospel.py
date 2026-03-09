@@ -1,6 +1,7 @@
 import os
 import json
 import argparse
+import datetime
 from typing import Dict
 from gospel.gospel_rss_parser import GospelRSSClient
 from gospel.gospel_podcast_publisher import GospelPodcastPublisher
@@ -22,17 +23,38 @@ def main():
     feed_url = config.get('feed_url')
     voice_key = config.get('voice_key', f'{args.lang}-female')
 
-    rss_client = GospelRSSClient(feed_url)
-    latest = rss_client.fetch_latest()
-    if not latest:
-        print('No RSS entry found. Check feed_url.')
-        return
-
-    title = latest['title']
-    description = latest['summary'] or latest['title']
-
     audio_gen = AudioGenerator(voice=voice_key, speed='normal')
-    episode = audio_gen.create_podcast_episode(title, description)
+
+    # --- Attempt 1: fetch structured content from the Vatican News HTML page ---
+    title = description = pub_date = guid = ""
+    episode = None
+    try:
+        from gospel.html_scraper import VaticanHTMLScraper
+        scraper = VaticanHTMLScraper(args.lang)
+        title, segments = scraper.fetch_segments()
+        episode = audio_gen.create_episode_from_segments(title, segments)
+        description = title
+        guid = scraper.day_url()
+        pub_date = datetime.date.today().strftime("%a, %d %b %Y 00:00:00 +0000")
+        print(f"HTML scraper succeeded for {args.lang}: {title}")
+    except Exception as scraper_err:
+        print(f"HTML scraper failed ({scraper_err}), falling back to RSS feed...")
+
+    # --- Fallback: use the RSS feed description ---
+    if episode is None:
+        rss_client = GospelRSSClient(feed_url)
+        latest = rss_client.fetch_latest()
+        if not latest:
+            print('No RSS entry found. Check feed_url.')
+            return
+
+        title = latest['title']
+        description = latest['summary'] or latest['title']
+        pub_date = latest.get('published', '')
+        guid = latest.get('link', '')
+
+        episode = audio_gen.create_podcast_episode(title, description)
+
     audio_path = episode['audio_path']
 
     publisher = GospelPodcastPublisher(os.path.join(LANG_CONFIG_DIR, f"{args.lang}.json"))
@@ -53,8 +75,8 @@ def main():
     publisher.add_episode(
         audio_url, title, description,
         duration=int(episode.get('duration', 0)),
-        pub_date=latest.get('published', ''),
-        guid=latest.get('link', ''),   # Vatican News URL as stable guid
+        pub_date=pub_date,
+        guid=guid,
         file_size=file_size,
     )
     # Keep up to 6 months of history (~180 episodes); delete older MP3s from storage.
