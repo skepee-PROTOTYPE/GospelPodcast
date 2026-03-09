@@ -46,6 +46,7 @@ def main():
         out_dir=None,
         segments=segments,
         pause_seconds=5 if args.lang == "it" and segments and len(segments) > 1 else 0,
+        title=title,
     )
 
     if args.out:

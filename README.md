@@ -9,9 +9,9 @@ Automated multilingual daily Gospel podcast on **Spotify**, powered by Cloud Run
 | ???? Italiano | [Listen](https://open.spotify.com/show/4kmH3RcGbb3HIcAs4vTFMJ) | [RSS](https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/it/podcast_feed.xml) |
 | ???? English | [Listen](https://open.spotify.com/show/4kmH3RcGbb3HIcAs4vTFMJ) | [RSS](https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/en/podcast_feed.xml) |
 | ???? Deutsch | [Listen](https://open.spotify.com/show/4kmH3RcGbb3HIcAs4vTFMJ) | [RSS](https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/de/podcast_feed.xml) |
-| ???? Français | [Listen](https://open.spotify.com/show/4kmH3RcGbb3HIcAs4vTFMJ) | [RSS](https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/fr/podcast_feed.xml) |
-| ???? Español | [Listen](https://open.spotify.com/show/4kmH3RcGbb3HIcAs4vTFMJ) | [RSS](https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/es/podcast_feed.xml) |
-| ???? Português | [Listen](https://open.spotify.com/show/4kmH3RcGbb3HIcAs4vTFMJ) | [RSS](https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/pt/podcast_feed.xml) |
+| ???? Franï¿½ais | [Listen](https://open.spotify.com/show/4kmH3RcGbb3HIcAs4vTFMJ) | [RSS](https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/fr/podcast_feed.xml) |
+| ???? Espaï¿½ol | [Listen](https://open.spotify.com/show/4kmH3RcGbb3HIcAs4vTFMJ) | [RSS](https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/es/podcast_feed.xml) |
+| ???? Portuguï¿½s | [Listen](https://open.spotify.com/show/4kmH3RcGbb3HIcAs4vTFMJ) | [RSS](https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/gospel/pt/podcast_feed.xml) |
 
 ## ?? Deploy
 

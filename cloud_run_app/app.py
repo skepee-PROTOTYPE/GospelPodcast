@@ -51,7 +51,8 @@ def _do_publish(lang: str) -> Tuple[Dict, int]:
     # Upload audio to Firebase Storage
     cfg_path = os.path.join(CONFIG_DIR, f"{lang}.json")
     publisher = GospelPodcastPublisher(cfg_path)
-    audio_url = publisher.upload_audio(audio_path)
+    # Restore episode history so today's episode is appended, not replaces everything
+    publisher.load_existing_feed()
 
     def _cleanup(*paths):
         for p in paths:
@@ -60,6 +61,16 @@ def _do_publish(lang: str) -> Tuple[Dict, int]:
             except Exception:
                 pass
 
+    # Skip if today's episode is already in the feed (idempotent re-runs)
+    guid = latest.get('link', '')
+    existing_guids = {ep['guid'] for ep in publisher.episodes}
+    existing_titles = {(ep['title'] or '').lower().strip() for ep in publisher.episodes}
+    if guid and guid in existing_guids or title.lower().strip() in existing_titles:
+        _cleanup(audio_path)
+        logger.info("[%s] already published: %s", lang, title)
+        return {"lang": lang, "title": title, "skipped": True, "rss": publisher.rss_blob_path}, 200
+
+    audio_url = publisher.upload_audio(audio_path)
     if not audio_url:
         _cleanup(audio_path)
         return {"error": "audio upload failed"}, 500
@@ -68,7 +79,8 @@ def _do_publish(lang: str) -> Tuple[Dict, int]:
     publisher.add_episode(audio_url, title, description,
                           duration=int(episode.get('duration', 0) or 0),
                           pub_date=latest.get('pub_date', ''),
-                          guid=latest.get('link', ''))
+                          guid=guid)
+    publisher.prune_episodes(max_episodes=180)
     rss_local = publisher.generate_rss()
     ok = publisher.upload_rss(rss_local)
     _cleanup(audio_path, rss_local)

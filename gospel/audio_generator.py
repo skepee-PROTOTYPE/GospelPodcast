@@ -232,26 +232,44 @@ def _synth_segment_safe(ssml: str, voice_name: str, language_code: str,
     inner_match = re.match(r"<speak>(.*)</speak>", ssml, re.DOTALL)
     inner = inner_match.group(1) if inner_match else ssml
 
-    # Split on SSML <break> tags (sentence/clause boundaries already inserted by
-    # _escape_and_mark). Splitting here avoids breaking mid-tag and respects the
-    # natural pause points already in the SSML.
-    _break_re = re.compile(r'(<break\s+time="[^"]*"\s*/>)', re.IGNORECASE)
-    # tokenise into [text, break, text, break, …]
-    tokens = _break_re.split(inner)
+    # Tokenise on break tags AND block-level open/close tags so we can track
+    # nesting depth and only split at breaks that are at the *outer* level
+    # (i.e. not inside <prosody> or <emphasis>). Splitting inside a block tag
+    # produces orphaned opening/closing tags that Neural2 rejects with 400.
+    _token_re = re.compile(
+        r'(<break\s[^>]*/>'           # self-closing break
+        r'|</(?:prosody|emphasis)>'   # closing block tag
+        r'|<(?:prosody|emphasis)\b[^>]*>)',  # opening block tag
+        re.IGNORECASE,
+    )
+    tokens = _token_re.split(inner)
 
     chunks: list[str] = []
     current: list[str] = []
     current_bytes = len("<speak></speak>".encode("utf-8"))
+    tag_depth = 0   # tracks how many block tags (prosody/emphasis) are open
 
     for token in tokens:
         t_bytes = len(token.encode("utf-8"))
-        if current and current_bytes + t_bytes > _SSML_BYTE_LIMIT:
+
+        is_break   = bool(re.match(r'<break\s', token, re.IGNORECASE))
+        is_open    = bool(re.match(r'<(?:prosody|emphasis)\b', token, re.IGNORECASE))
+        is_close   = bool(re.match(r'</(?:prosody|emphasis)', token, re.IGNORECASE))
+
+        # Only split at a break when we are at the outer level (not inside any
+        # block-level tag) and the current chunk is already large enough.
+        if is_break and tag_depth == 0 and current and current_bytes + t_bytes > _SSML_BYTE_LIMIT:
             chunks.append("<speak>" + "".join(current) + "</speak>")
-            current = [token]
-            current_bytes = len("<speak></speak>".encode("utf-8")) + t_bytes
-        else:
-            current.append(token)
-            current_bytes += t_bytes
+            current = []
+            current_bytes = len("<speak></speak>".encode("utf-8"))
+
+        current.append(token)
+        current_bytes += t_bytes
+
+        if is_open:
+            tag_depth += 1
+        elif is_close:
+            tag_depth = max(0, tag_depth - 1)
 
     if current:
         chunks.append("<speak>" + "".join(current) + "</speak>")

@@ -86,55 +86,61 @@ def publish_all_for_lang(lang: str) -> None:
     audio_gen = AudioGenerator(voice=voice_key, speed='normal')
     published_count = 0
 
-    for entry in reversed(new_entries):   # reversed → oldest first
-        title       = entry.get('title', '')
-        description = entry.get('summary') or title
-        link        = entry.get('link', '')
-        pub_date    = entry.get('published', '')
+    try:
+        for entry in reversed(new_entries):   # reversed → oldest first
+            title       = entry.get('title', '')
+            description = entry.get('summary') or title
+            link        = entry.get('link', '')
+            pub_date    = entry.get('published', '')
 
-        print(f"\n  [{lang}] Publishing: {title[:70]}")
-        try:
-            episode   = audio_gen.create_podcast_episode(title, description)
-            audio_path = episode['audio_path']
-
-            audio_url = publisher.upload_audio(audio_path)
+            print(f"\n  [{lang}] Publishing: {title[:70]}")
             try:
-                file_size = os.path.getsize(audio_path)
-                os.remove(audio_path)
-            except OSError:
-                file_size = 0
+                episode   = audio_gen.create_podcast_episode(title, description)
+                audio_path = episode['audio_path']
 
-            if not audio_url:
-                print(f"    ERROR: audio upload failed.")
-                continue
+                audio_url = publisher.upload_audio(audio_path)
+                try:
+                    file_size = os.path.getsize(audio_path)
+                    os.remove(audio_path)
+                except OSError:
+                    file_size = 0
 
-            publisher.add_episode(
-                audio_url,
-                title,
-                description,
-                duration=int(episode.get('duration', 0)),
-                pub_date=pub_date,
-                guid=link or '',   # use Vatican News URL as stable guid
-                file_size=file_size,
-            )
-            published_count += 1
-            print(f"    OK: {audio_url}")
+                if not audio_url:
+                    print(f"    ERROR: audio upload failed.")
+                    continue
 
-        except Exception as exc:
-            print(f"    ERROR: {exc}")
+                publisher.add_episode(
+                    audio_url,
+                    title,
+                    description,
+                    duration=int(episode.get('duration', 0)),
+                    pub_date=pub_date,
+                    guid=link or '',   # use Vatican News URL as stable guid
+                    file_size=file_size,
+                )
+                published_count += 1
+                print(f"    OK: {audio_url}")
 
-    if published_count == 0:
-        print(f"\n  No new episodes were successfully published for {lang}.")
-        return
-
-    # --- Prune to 6-month cap and upload RSS ---
-    publisher.prune_episodes(max_episodes=180)
-    rss_local = publisher.generate_rss()
-    ok = publisher.upload_rss(rss_local)
-    if ok:
-        print(f"\n  RSS uploaded ({len(publisher.episodes)} total episodes): {publisher.rss_blob_path}")
-    else:
-        print(f"\n  ERROR: RSS upload failed for {lang}.")
+            except KeyboardInterrupt:
+                # gRPC can surface Ctrl+C / interrupt as KeyboardInterrupt inside
+                # Cython code.  Treat it as a transient failure for this entry so
+                # the loop continues rather than aborting the whole run.
+                print(f"    ERROR: interrupted (transient gRPC signal) — skipping entry.")
+            except Exception as exc:
+                print(f"    ERROR: {exc}")
+    finally:
+        # Always attempt to save progress even if some entries failed or the loop
+        # was interrupted — so subsequent runs can skip already-published entries.
+        if published_count > 0:
+            publisher.prune_episodes(max_episodes=180)
+            rss_local = publisher.generate_rss()
+            ok = publisher.upload_rss(rss_local)
+            if ok:
+                print(f"\n  RSS uploaded ({len(publisher.episodes)} total episodes): {publisher.rss_blob_path}")
+            else:
+                print(f"\n  ERROR: RSS upload failed for {lang}.")
+        else:
+            print(f"\n  No new episodes were successfully published for {lang}.")
 
 
 def main() -> None:

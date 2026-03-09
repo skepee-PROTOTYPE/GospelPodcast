@@ -13,6 +13,12 @@ This is achieved by `_build_episode_ssml()` inserting `<break time="2.5s"/>` bet
 **Critical precondition:** `build_liturgy_segments()` must return **multiple segments** (one per section).
 If it falls back to returning the whole description as a single string, there are NO pauses.
 
+**Sunday / feast day structure:** On Sundays and major feasts, Vatican News includes a second reading
+(`Seconda Lettura` / `Second Reading` / `Deuxième Lecture` / etc.) between the first reading and the psalm.
+`build_liturgy_segments()` detects this via the `"seconda"` key in `LITURGY_PATTERNS` and emits it as an
+additional segment — so episodes may have up to 4 sections:
+`Prima Lettura → Seconda Lettura → Vangelo → Pope comment`. Both readings MUST appear in the output.
+
 **Why it breaks silently:** The Vatican News RSS feed sometimes delivers the entire description as a
 single flat paragraph (no `<br>` tags). The line-based section detection then finds index -1 for most
 sections and falls back to a single segment. The fix is the *positional fallback* in
@@ -96,7 +102,18 @@ This stripping is applied in **both** the line-based and the positional code pat
 
 ---
 
-## 6. Test cases that must keep working
+## 6. SSML chunking must never split inside block-level tags
+
+When a segment (typically the Gospel on Sundays) exceeds `_SSML_BYTE_LIMIT` (4800 bytes),
+`_synth_segment_safe()` splits the SSML at `<break>` boundaries. **Splits must only occur at
+`<break>` tags that are at the outer (depth-0) nesting level** — never inside an open `<prosody>`
+or `<emphasis>` block. Splitting inside a block tag produces orphaned opening/closing tags that
+Neural2 voices reject with `400 Invalid SSML`. The chunker tracks `tag_depth` (incremented on
+`<prosody>`/`<emphasis>` open, decremented on close) and only splits when `tag_depth == 0`.
+
+---
+
+## 7. Test cases that must keep working
 
 ```python
 from gospel.text_normalizer import build_liturgy_segments

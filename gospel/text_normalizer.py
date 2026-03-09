@@ -166,7 +166,7 @@ LITURGY_PATTERNS: dict[str, dict[str, str]] = {
         "prima":   r"^prima\s+lettura",
         "seconda": r"^seconda\s+lettura",
         "salmo":   r"^salmo\b",          # matches "Salmo Responsoriale"
-        "vangelo": r"dal\s+vangelo|^vangelo\b",
+        "vangelo": r"^dal\s+vangelo|^vangelo\b",  # ^ anchors prevent false match inside body text
     },
     "en": {
         "prima":   r"^a\s+reading\b|^first\s+reading",
@@ -354,6 +354,9 @@ def _smooth_for_tts(text: str, language: str = "it", flatten_lines: bool = True)
     smoothed = re.sub(r":(?!\s*$)", ",", smoothed, flags=re.MULTILINE)
     # Parentheses — remove (they wrap references or metadata the reader trips over)
     smoothed = re.sub(r"[()]", "", smoothed)
+    # Space-dash-space used as em-dash in Italian liturgical text (e.g. "disse - rispose")
+    # → replace with comma so TTS reads a natural pause instead of "trattino"
+    smoothed = re.sub(r"[ \t]+-[ \t]+", ", ", smoothed)
     # Collapse consecutive commas (can result from colon before «, or other combos)
     smoothed = re.sub(r"(,\s*){2,}", ", ", smoothed)
     if flatten_lines:

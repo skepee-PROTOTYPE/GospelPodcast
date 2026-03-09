@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -9,6 +10,35 @@ from gospel.text_normalizer import normalize_for_tts
 SUPPORTED = {"en", "it", "es", "fr", "pt", "de"}
 
 
+def _clean_for_gtts(segment: str, lang: str) -> str:
+    """Normalize a liturgy segment and strip SSML markers for gTTS.
+
+    gTTS cannot handle __POPE__, __PAUSE__, __QSTART__, __QEND__ — it reads
+    them as literal words.  This function:
+    - Strips the __POPE__ prefix (the header line is kept as readable text)
+    - Replaces __PAUSE__ with a period so gTTS pauses naturally
+    - Removes __QSTART__ / __QEND__ guillemet markers
+    - Preserves newlines as sentence-boundary periods so section labels get
+      a natural breath before the reading body begins
+    """
+    # Normalize without flattening so newlines between label/body are kept
+    normalized = normalize_for_tts(segment, lang=lang, flatten_lines=False)
+    # Strip __POPE__ prefix
+    if normalized.startswith("__POPE__"):
+        normalized = normalized[len("__POPE__"):].strip()
+    # Replace markers
+    normalized = normalized.replace("__PAUSE__", ".")
+    normalized = normalized.replace("__QSTART__", "")
+    normalized = normalized.replace("__QEND__", "")
+    # Newlines between section label and body → period for natural gTTS pause
+    normalized = re.sub(r"\s*\n\s*", ". ", normalized)
+    # Clean up artefacts from marker removal
+    normalized = re.sub(r"\.\s*\.+", ".", normalized)
+    normalized = re.sub(r",\s*\.\s*", ". ", normalized)
+    normalized = re.sub(r"[ \t]{2,}", " ", normalized)
+    return normalized.strip()
+
+
 def synthesize(
     text: str,
     lang: str = "it",
@@ -16,6 +46,7 @@ def synthesize(
     out_dir: str = None,
     segments: list[str] | None = None,
     pause_seconds: int = 0,
+    title: str = "",
 ) -> str:
     lang = (lang or "it").lower()
     if lang not in SUPPORTED:
@@ -25,9 +56,14 @@ def synthesize(
     base = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_path = os.path.join(out_dir, f"gospel_{lang}_{base}.mp3")
 
-    normalized_segments = [normalize_for_tts(s, lang=lang) for s in (segments or []) if (s or "").strip()]
+    normalized_segments = [_clean_for_gtts(s, lang) for s in (segments or []) if (s or "").strip()]
     if not normalized_segments:
         normalized_segments = [normalize_for_tts(text, lang=lang)]
+
+    # Prepend title as the first spoken segment when provided
+    if title:
+        title_clean = normalize_for_tts(title, lang=lang)
+        normalized_segments.insert(0, title_clean)
 
     if len(normalized_segments) == 1 or pause_seconds <= 0:
         tts = gTTS(text=normalized_segments[0], lang=lang, slow=(speed == "slow"))

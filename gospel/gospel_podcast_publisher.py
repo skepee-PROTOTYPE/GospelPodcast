@@ -139,19 +139,26 @@ class GospelPodcastPublisher:
         except Exception as e:
             logger.warning(f"Error during episode pruning: {e}")
 
-    def upload_audio(self, audio_path: str) -> Optional[str]:
-        try:
-            self._init_firebase()
-            bucket = self.storage.bucket()
-            filename = os.path.basename(audio_path)
-            blob_path = f"{self.storage_prefix}/podcast_audio/{filename}"
-            blob = bucket.blob(blob_path)
-            blob.upload_from_filename(audio_path, content_type='audio/mpeg')
-            blob.make_public()
-            return blob.public_url
-        except Exception as e:
-            logger.error(f"Firebase upload failed: {e}")
-            return None
+    def upload_audio(self, audio_path: str, retries: int = 3) -> Optional[str]:
+        for attempt in range(1, retries + 1):
+            try:
+                self._init_firebase()
+                bucket = self.storage.bucket()
+                filename = os.path.basename(audio_path)
+                blob_path = f"{self.storage_prefix}/podcast_audio/{filename}"
+                blob = bucket.blob(blob_path)
+                blob.upload_from_filename(
+                    audio_path,
+                    content_type='audio/mpeg',
+                    timeout=300,  # 5-minute upload timeout
+                )
+                blob.make_public()
+                return blob.public_url
+            except Exception as e:
+                logger.warning(f"Firebase upload attempt {attempt}/{retries} failed: {e}")
+                if attempt == retries:
+                    logger.error(f"Firebase upload failed after {retries} attempts.")
+                    return None
 
     def add_episode(self, audio_url: str, title: str, description: str, duration: int = 0,
                     pub_date: str = '', guid: str = '', file_size: int = 0):
@@ -245,7 +252,9 @@ class GospelPodcastPublisher:
             self._init_firebase()
             bucket = self.storage.bucket()
             blob = bucket.blob(self.rss_blob_path)
+            blob.cache_control = "no-cache, no-store, must-revalidate"
             blob.upload_from_filename(rss_local_path, content_type='application/rss+xml; charset=utf-8')
+            blob.patch()
             blob.make_public()
             return True
         except Exception as e:
