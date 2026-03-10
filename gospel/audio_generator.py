@@ -84,8 +84,6 @@ def _escape_and_mark(text: str) -> str:
       __PAUSE__  -> short break (semicolon pause)
       __QSTART__ -> open prosody for scripture guillemet quote (deeper pitch)
       __QEND__   -> close prosody
-    Also adds explicit break tags after sentence-ending punctuation and commas
-    to ensure Neural2 breathes naturally.
 
     NOTE: Do NOT use this for text that will be wrapped in <emphasis> or other
     structural tags — use _escape_header() instead, which skips break injection.
@@ -94,12 +92,9 @@ def _escape_and_mark(text: str) -> str:
     safe = safe.replace("__PAUSE__",  f'<break time="{_PAUSE_DURATION_S}s"/>')
     safe = safe.replace("__QSTART__", '<break time="200ms"/><prosody pitch="-6%" rate="97%">')
     safe = safe.replace("__QEND__",   '</prosody><break time="150ms"/>')
-    # Neural2 voices already handle commas and sentence-ending punctuation
-    # with natural pauses.  Adding explicit <break> tags at every comma
-    # causes unnatural double-pauses mid-sentence.  We only add a modest
-    # break at true sentence boundaries (period / ! / ?) so the listener
-    # clearly hears the end of each sentence.
-    safe = re.sub(r'([.!?])(?=\s)', r'\1<break time="300ms"/>', safe)
+    # Neural2 voices already produce natural sentence-boundary pauses at . ! ?
+    # Adding explicit <break> tags on top creates a double-pause that sounds choppy.
+    # We rely on Neural2's built-in prosody instead.
     return safe
 
 

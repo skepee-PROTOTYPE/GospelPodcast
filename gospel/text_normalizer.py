@@ -385,11 +385,47 @@ def _smooth_for_tts(text: str, language: str = "it", flatten_lines: bool = True)
     # Collapse multiple horizontal spaces/tabs (NOT newlines — those are section
     # boundaries when flatten_lines=False and must be preserved).
     smoothed = re.sub(r"[ \t]{2,}", " ", smoothed)
+    # Ensure quote markers are properly paired (nested guillemets in gospel texts
+    # produce consecutive __QSTART__ which would create invalid SSML prosody nesting).
+    smoothed = _balance_quote_markers(smoothed)
     return smoothed.strip()
 
 
 
 # Keep old name as an alias so any external callers are not broken.
+def _balance_quote_markers(text: str) -> str:
+    """Ensure __QSTART__/__QEND__ markers are properly alternating.
+
+    Gospel texts sometimes contain nested guillemet quotes::
+
+        «outer text «inner quote» outer text»
+
+    Both «·characters become __QSTART__, creating unbalanced SSML prosody tags
+    that Cloud TTS rejects.  This pass collapses nested opens: whenever a
+    second __QSTART__ arrives while one is already open, the previous open is
+    closed first, so the final SSML output only contains flat open-close pairs.
+    """
+    parts = re.split(r'(__QSTART__|__QEND__)', text)
+    result: list[str] = []
+    inside = False
+    for part in parts:
+        if part == '__QSTART__':
+            if inside:
+                result.append('__QEND__')   # close the previous open before starting a new one
+            result.append('__QSTART__')
+            inside = True
+        elif part == '__QEND__':
+            if inside:
+                result.append('__QEND__')
+                inside = False
+            # else: spurious close with no open — skip silently
+        else:
+            result.append(part)
+    if inside:                              # close any quote still open at end of segment
+        result.append('__QEND__')
+    return ''.join(result)
+
+
 def _smooth_italian_for_tts(text: str, flatten_lines: bool = True) -> str:
     return _smooth_for_tts(text, language="it", flatten_lines=flatten_lines)
 
@@ -437,6 +473,10 @@ def normalize_verse_refs(text: str, language: str) -> str:
     - ``5, 1``    → ``5 1``
     """
     range_word = VERSE_RANGE_WORDS.get(language, "to")
+
+    # Normalise en-dashes (U+2013 used in DE/FR verse ranges) to regular hyphens
+    # so all range patterns below match uniformly.
+    text = text.replace("\u2013", "-")
 
     # "9,4b-10" or "9, 4b-10" — sub-verse letter + range
     text = re.sub(
@@ -573,6 +613,20 @@ def _find_pope_attribution_in_lines(lines: list[str]) -> tuple[Optional[str], Op
 # Section-header helpers
 # ---------------------------------------------------------------------------
 
+# Pure ordinal section labels per language (e.g. "Prima Lettura", "Primera Lectura").
+# Used to detect stray redundant label lines that some Vatican News pages emit as
+# a standalone <p> after a merged label+attribution paragraph.  Separate from
+# LITURGY_PATTERNS because those patterns also cover book attribution lines.
+_ORDINAL_SECTION_LABELS: dict[str, str] = {
+    "it": r"prima\s+lettura|seconda\s+lettura",
+    "en": r"first\s+reading|second\s+reading",
+    "fr": r"premi[eè]re?\s+lecture|deuxi[eè]me\s+lecture",
+    "es": r"primera\s+lectura|segunda\s+lectura",
+    "pt": r"primeira\s+leitura|segunda\s+leitura",
+    "de": r"erste\s+lesung|zweite\s+lesung",
+}
+
+
 def _strip_verse_refs_from_header(line: str, language: str = "it") -> str:
     """Strip trailing chapter/verse numbers from a reading section header line.
 
@@ -593,39 +647,90 @@ def _strip_verse_refs_from_header(line: str, language: str = "it") -> str:
 
 
 def _strip_section_verse_refs(section_text: str, language: str) -> str:
-    """Apply verse-ref stripping to the first two lines of a section block.
+    """Apply verse-ref stripping to the first lines of a section block.
 
     The first line is the section label ("Prima lettura") and the second is
     the book-source line ("Dal libro della Genesi 1 1 a 13").  Stripping
     trailing numbers from both ensures TTS only announces the book name.
-    Lines that are purely an abbreviated book+verse reference (e.g. "Gn 37,3-4"
-    or "Mt 21 33 a 43") are dropped entirely — they carry no speakable content.
+    Lines that are purely a bible book reference (abbreviated OR full expanded
+    name, with or without verse numbers) are dropped entirely — they carry no
+    speakable content beyond what the source header already provides.
     """
-    # Lines that are purely a book reference (abbreviation or full name + verse
-    # numbers) should be dropped — they carry no speakable content beyond
-    # what the book-source header line already announced.
-    #   Pattern A: short abbreviation, e.g. "Gn 37,3-4" or just "Gn"
-    #   Pattern B: full capitalized book name (1-2 words) + verse numbers,
-    #              e.g. "Matteo 21 33 a 43. 45-46" or "Giovanni Paolo 2 4"
+    # Set of all known expanded book names for this language (lowercase).
+    # Used to detect lines like "Giovanni", "Lettera ai Romani 5 1 a 2. 5-8".
+    _known_books = {v.lower() for v in LANGUAGE_BIBLE_EXPANSIONS.get(language, {}).values()}
+
+    # Verse-ref characters: digits, spaces, commas, dots, colons, hyphens,
+    # en-dashes (U+2013 used in DE/FR), lowercase letters (range words).
+    _vref_chars = r"[\d\s,;.:–\-a-zà-ü]"
+
     _abbrev_ref_re = re.compile(
-        # Pattern A: optional leading digit + abbreviated book name + optional verse numbers
-        # Matches: "Gn", "Gn 37,3-4", "2Re", "2Re 5,1-15a", "1Cor 5 1 a 10"
-        r"^(?:\d+\s*)?[A-ZÀ-Ü][a-zà-ü]{0,4}(?:\s+\d[\d\s,;.:\-a-zA-Z]*)?\s*$"
+        # Pattern A: optional leading digit + abbreviated book name (up to 6 lowercase)
+        #            + optional verse numbers STARTING WITH A DIGIT.
+        #            Matches: "Gn", "Gn 37,3-4", "2Re", "2Re 5,1-15a", "Ex 17 3–7"
+        #            Does NOT match: "Prima Lettura", "Dal Vangelo", "Dalla lettera..."
+        rf"^(?:\d+\s*)?[A-ZÀ-Ü][a-zà-ü]{{0,6}}(?:\s+\d{_vref_chars}*)?\s*$"
         r"|"
-        # Pattern B: full book name (1-2 capitalised words) + verse numbers
-        # Matches: "Matteo 21 33 a 43"
-        r"^[A-ZÀ-Ü][a-zà-ü]+(?:\s+[A-ZÀ-Ü][a-zà-ü]+)?\s+\d[\d\s,;.:\-a-zA-Z]*\s*$"
+        # Pattern B: full book name (1-2 capitalised words) + verse numbers.
+        # Matches: "Matteo 21 33 a 43", "Johannes 4 5–15. 19–26"
+        rf"^[A-ZÀ-Ü][a-zà-ü]+(?:\s+[A-ZÀ-Ü][a-zà-ü]+)?\s+\d{_vref_chars}*\s*$"
+        r"|"
+        # Pattern C: standalone verse reference with no book name prefix.
+        # Vatican News (EN/PT) places verse refs on their own line: "17, 3-7",
+        # "4, 5–42", "4 5 a 15. 19–26. 39. 40–42", "5, 1-2 5 to".
+        # Contains ONLY digits, verse-ref punctuation and lowercase letters.
+        rf"^\d{_vref_chars}*$"
     )
+
+    def _is_bare_ref(line: str) -> bool:
+        s = line.strip()
+        if not s:
+            return False
+        if _abbrev_ref_re.match(s):
+            return True
+        # Check against known expanded book names (handles multi-word names like
+        # "Lettera ai Romani", "Römer", "Johannes", etc.)
+        s_lower = s.lower()
+        for book in _known_books:
+            if s_lower == book:
+                return True  # standalone full book name, nothing else to speak
+            if s_lower.startswith(book) and len(s_lower) > len(book):
+                suffix = s_lower[len(book):].strip()
+                # suffix must contain only verse-ref chars (digits, spaces, punctuation)
+                if re.match(rf'^{_vref_chars}*$', suffix) and re.search(r'\d', suffix):
+                    return True  # full book name + verse ref
+        return False
+
     sec_lines = section_text.split("\n")
     # Strip trailing verse numbers from first two header lines
     for i in range(min(2, len(sec_lines))):
         sec_lines[i] = _strip_verse_refs_from_header(sec_lines[i], language)
-    # Drop any of the first 4 lines that are purely abbreviated references
+    # Drop any of the first 4 lines that are purely bare book / verse references
     cleaned: list[str] = []
     for i, line in enumerate(sec_lines):
-        if i < 4 and line.strip() and _abbrev_ref_re.match(line.strip()):
-            continue  # skip standalone abbreviated ref line
+        if i < 4 and _is_bare_ref(line):
+            continue
         cleaned.append(line)
+
+    # Drop stray redundant section-label lines (e.g. ES page emits an extra
+    # <p>"Primera Lectura"</p> after the merged label+attribution paragraph).
+    _lang_patterns = LITURGY_PATTERNS.get(language, {})
+    _ordinal_pat = _ORDINAL_SECTION_LABELS.get(language)
+    if ((_lang_patterns or _ordinal_pat) and len(cleaned) >= 2):
+        _stray_parts = [p.lstrip('^') for p in _lang_patterns.values()]
+        if _ordinal_pat:
+            _stray_parts.append(_ordinal_pat)
+        _stray_rx = re.compile("|".join(_stray_parts), re.IGNORECASE)
+        final: list[str] = [cleaned[0]]
+        for idx, line in enumerate(cleaned[1:], 1):
+            s = line.strip()
+            if idx < 5 and s and len(s) < 55:
+                m = _stray_rx.search(s)
+                if m and m.start() == 0 and m.end() == len(s):
+                    continue  # exact full-match stray section label — drop it
+            final.append(line)
+        cleaned = final
+
     return "\n".join(cleaned).strip()
 
 
