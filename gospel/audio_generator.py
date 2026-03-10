@@ -153,8 +153,11 @@ def _section_to_ssml(segment: str) -> str:
     if sub_header_raw:
         # Short breath between section label and book attribution
         parts.append('<break time="0.5s"/>')
+        # Add a terminal period so Neural2 uses falling (complete) intonation
+        # rather than the hesitant rising tone it produces on unpunctuated phrases.
+        sub_text = sub_header_raw if re.search(r'[.!?:]$', sub_header_raw) else sub_header_raw + '.'
         parts.append(
-            f'<emphasis level="moderate">{_escape_header(sub_header_raw)}</emphasis>'
+            f'<emphasis level="moderate">{_escape_header(sub_text)}</emphasis>'
         )
 
     if body_raw:

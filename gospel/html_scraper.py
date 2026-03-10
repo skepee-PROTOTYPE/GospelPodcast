@@ -317,9 +317,16 @@ def _pope_segment(pope_plain: str, lang: str) -> Optional[str]:
         return None
 
     # Primary: parenthesized attribution at the end of the last line
-    _, meta = _extract_pope_meta(lines[-1])
+    content_before_meta, meta = _extract_pope_meta(lines[-1])
     if meta is not None:
-        body_text = "\n".join(lines[:-1])
+        # The body and attribution may be in the same paragraph (single line).
+        # content_before_meta holds the body text from that line (before the
+        # closing parenthetical); lines[:-1] holds any preceding paragraphs.
+        preceding = "\n".join(lines[:-1])
+        if content_before_meta.strip():
+            body_text = (preceding + "\n" + content_before_meta).strip()
+        else:
+            body_text = preceding
     else:
         # Secondary: standalone attribution line anywhere in the section
         meta, attr_idx = _find_pope_attribution_in_lines(lines)
