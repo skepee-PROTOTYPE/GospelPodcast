@@ -77,6 +77,37 @@ def _strip_xml_illegal(text: str) -> str:
     return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", text)
 
 
+def _balance_prosody_tags(ssml_fragment: str) -> str:
+    """Remove orphaned </prosody> closers and add missing </prosody> closers.
+
+    Quote markers can be unbalanced when language-specific quotation characters
+    are misidentified (e.g. German „text" uses U+201E to open and U+201C to
+    close, but U+201C is also mapped to __QSTART__ by the normaliser).
+    This results in orphaned </prosody> tags (closer at depth 0) or unclosed
+    <prosody> blocks — both cause Cloud TTS Neural2 to return 400 Invalid SSML.
+    """
+    _tag_re = re.compile(r'(<prosody\b[^>]*>|</prosody>)', re.IGNORECASE)
+    tokens = _tag_re.split(ssml_fragment)
+    out: list[str] = []
+    depth = 0
+    for tok in tokens:
+        if re.match(r'<prosody\b', tok, re.IGNORECASE):
+            depth += 1
+            out.append(tok)
+        elif re.match(r'</prosody>', tok, re.IGNORECASE):
+            if depth > 0:
+                depth -= 1
+                out.append(tok)
+            # else: orphaned closer — silently drop it
+        else:
+            out.append(tok)
+    # Close any still-open prosody blocks
+    while depth > 0:
+        out.append('</prosody>')
+        depth -= 1
+    return ''.join(out)
+
+
 def _escape_and_mark(text: str) -> str:
     """HTML-escape plain text and replace audio markers with SSML tags.
 
@@ -174,9 +205,20 @@ def _section_to_ssml(segment: str) -> str:
         parts.append('<break time="1.0s"/>')
         body_ssml = _escape_and_mark(body_raw)
         if is_pope:
-            # Pope's reflection — slightly slower and deeper for distinction
+            # Pope's reflection — slightly slower and deeper for distinction.
+            # Neural2 voices do NOT support nested <prosody> elements and reject
+            # them with 400 Invalid SSML.  The guillemet-quote markers produce an
+            # inner <prosody pitch="-6%"> that would be nested inside the outer
+            # pope <prosody pitch="-4%">.  Collapse the inner prosody tags to
+            # just their surrounding pauses so the outer wrapper is always flat.
+            body_ssml = re.sub(r'<prosody[^>]*>', '', body_ssml)
+            body_ssml = re.sub(r'</prosody>', '', body_ssml)
             parts.append(f'<prosody pitch="-4%" rate="95%">{body_ssml}</prosody>')
         else:
+            # Balance prosody tags: orphaned closers (e.g. from misidentified
+            # German „text" closing marks) or unclosed openers both cause
+            # Neural2 to reject the SSML with 400 Invalid SSML.
+            body_ssml = _balance_prosody_tags(body_ssml)
             parts.append(body_ssml)
 
     return "".join(parts)
@@ -256,6 +298,11 @@ def _synth_segment_safe(ssml: str, voice_name: str, language_code: str,
     current: list[str] = []
     current_bytes = len("<speak></speak>".encode("utf-8"))
     tag_depth = 0   # tracks how many block tags (prosody/emphasis) are open
+    # Use a lower split threshold than _SSML_BYTE_LIMIT: a long <prosody> block
+    # that follows a depth-0 break can add hundreds of bytes before the next
+    # eligible split point, pushing the chunk over Cloud TTS's hard 5000-byte
+    # limit.  The 1000-byte buffer provides headroom for those blocks.
+    _CHUNK_SPLIT_THRESHOLD = _SSML_BYTE_LIMIT - 1000
 
     for token in tokens:
         t_bytes = len(token.encode("utf-8"))
@@ -264,9 +311,9 @@ def _synth_segment_safe(ssml: str, voice_name: str, language_code: str,
         is_open    = bool(re.match(r'<(?:prosody|emphasis)\b', token, re.IGNORECASE))
         is_close   = bool(re.match(r'</(?:prosody|emphasis)', token, re.IGNORECASE))
 
-        # Only split at a break when we are at the outer level (not inside any
-        # block-level tag) and the current chunk is already large enough.
-        if is_break and tag_depth == 0 and current and current_bytes + t_bytes > _SSML_BYTE_LIMIT:
+        # Split at a depth-0 break when the accumulated content is at or above
+        # the split threshold — see _CHUNK_SPLIT_THRESHOLD comment above.
+        if is_break and tag_depth == 0 and current and current_bytes >= _CHUNK_SPLIT_THRESHOLD:
             chunks.append("<speak>" + "".join(current) + "</speak>")
             current = []
             current_bytes = len("<speak></speak>".encode("utf-8"))
