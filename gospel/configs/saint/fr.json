@@ -1,0 +1,14 @@
+{
+  "language": "fr",
+  "bucket_name": "gospelpodcast-87c74.firebasestorage.app",
+  "storage_prefix": "saint/fr",
+  "voice_key": "fr-FR-Neural2-B",
+  "podcast_info": {
+    "title": "Saint du Jour (Français)",
+    "author": "Vatican News",
+    "website": "",
+    "description": "Saint du jour depuis Vatican News",
+    "cover_art": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/saint/fr/cover.png",
+    "rss_url": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/saint/fr/podcast_feed.xml"
+  }
+}

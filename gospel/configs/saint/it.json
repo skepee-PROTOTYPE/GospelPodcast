@@ -1,0 +1,14 @@
+{
+  "language": "it",
+  "bucket_name": "gospelpodcast-87c74.firebasestorage.app",
+  "storage_prefix": "saint/it",
+  "voice_key": "it-IT-Neural2-C",
+  "podcast_info": {
+    "title": "Santo del Giorno (Italiano)",
+    "author": "Vatican News",
+    "website": "",
+    "description": "Santo del giorno da Vatican News",
+    "cover_art": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/saint/it/cover.png",
+    "rss_url": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/saint/it/podcast_feed.xml"
+  }
+}

@@ -184,7 +184,13 @@ LITURGY_PATTERNS: dict[str, dict[str, str]] = {
         "prima":   r"^lectura\s+de",
         "seconda": r"^segunda\s+lectura",
         "salmo":   r"^salmo\s+responsorial|^salmo\b",
-        "vangelo": r"^lectura\s+del\s+(santo\s+)?evangelio|^evangelio\b",
+        # The ES RSS feed sometimes omits section labels entirely, providing only
+        # the book+verse reference line (e.g. "Mateo 5, 17-19") as the section
+        # marker.  The gospel-book alternatives after | match those bare references
+        # at line-start and also serve the positional fallback (^ stripped).
+        # NOTE: avoid nested (?:...) groups here — _find_inline_pos splits on |
+        # naively, so each alternative must be independently valid.
+        "vangelo": r"^lectura\s+del\s+(santo\s+)?evangelio|^evangelio\b|^mateo\s+\d|^marcos\s+\d|^lucas\s+\d|^juan\s+\d",
     },
     "pt": {
         "prima":   r"^leitura\s+d",
@@ -366,7 +372,14 @@ def _smooth_for_tts(text: str, language: str = "it", flatten_lines: bool = True)
     smoothed = re.sub(r'"(?=\s*(?:[,;:.!?]|\s|$))', " __QEND__ ", smoothed, flags=re.MULTILINE)
     # Colons that are NOT at end of line/segment — replace with comma
     smoothed = re.sub(r":(?!\s*$)", ",", smoothed, flags=re.MULTILINE)
-    # Parentheses — remove (they wrap references or metadata the reader trips over)
+    # Parenthetical verse citations — remove the entire group (content + parens).
+    # By this point expand_bible_refs and normalize_verse_refs have already run,
+    # so "(Mt 5,17)" has become "(Matteo 5 17)" and "(cfr Lc 23,34)" has become
+    # "(confronta Luca 23 34)".  Removing the whole group prevents the TTS from
+    # reading out chapter/verse numbers buried inside the pope's body text.
+    # Pattern: any parenthetical containing at least one digit (verse number).
+    smoothed = re.sub(r"\([^()]{0,120}\d[^()]{0,60}\)", " ", smoothed)
+    # Remaining lone parentheses — remove (they wrap metadata the reader trips over)
     smoothed = re.sub(r"[()]", "", smoothed)
     # Space-dash-space used as em-dash in Italian liturgical text (e.g. "disse - rispose")
     # → replace with comma so TTS reads a natural pause instead of "trattino"
@@ -379,9 +392,10 @@ def _smooth_for_tts(text: str, language: str = "it", flatten_lines: bool = True)
         smoothed = re.sub(r"\s*\n\s*", "\n", smoothed)
     # NOTE: periods are intentionally kept — Cloud TTS Neural2 uses them for natural
     # sentence-boundary pauses. Explicit <break> tags are added in _escape_and_mark.
-    # Semicolons — replace with __PAUSE__ so the audio generator inserts real silence
+    # Semicolons — replace with comma so Neural2 handles the brief pause naturally
+    # without inserting an artificial <break> tag that sounds choppy mid-sentence.
     # Use [ \t]* (not \s*) to preserve newlines at line/section boundaries.
-    smoothed = re.sub(r"[ \t]*;[ \t]*", " __PAUSE__ ", smoothed)
+    smoothed = re.sub(r"[ \t]*;[ \t]*", ", ", smoothed)
     # Collapse multiple horizontal spaces/tabs (NOT newlines — those are section
     # boundaries when flatten_lines=False and must be preserved).
     smoothed = re.sub(r"[ \t]{2,}", " ", smoothed)
@@ -630,19 +644,25 @@ _ORDINAL_SECTION_LABELS: dict[str, str] = {
 def _strip_verse_refs_from_header(line: str, language: str = "it") -> str:
     """Strip trailing chapter/verse numbers from a reading section header line.
 
-    After normalize_verse_refs() verse refs look like "1 1 a 13" or just "26".
-    These are stripped from the END of the header so TTS announces only the
-    book name (e.g. "dal libro della Genesi") without reading out the numbers.
+    After normalize_verse_refs() verse refs look like "1 1 a 13", "27 30 a 28 7"
+    (cross-chapter), or just "26".  These are stripped from the END of the header
+    so TTS announces only the book name (e.g. "dal libro della Genesi") without
+    reading out the numbers.
+
+    Handles all cases with a single regex:
+      "26"            -- single number
+      "10 1"          -- chapter + verse
+      "5 1 a 13"      -- simple range
+      "27 30 a 28 7"  -- cross-chapter range (4 digit groups)
     """
     range_word = re.escape(VERSE_RANGE_WORDS.get(language, "to"))
-    # Full range: e.g. "1 1 a 13" or "10 46 à 52"
+    # Strip any trailing sequence of digit groups, optionally followed by a
+    # range word and a second group of digit groups.  Anchored to end-of-string.
     line = re.sub(
-        rf'\s+\d+\s+\d+\s+{range_word}\s+\d+\s*$', '', line, flags=re.IGNORECASE
+        rf'\s+\d+(?:\s+\d+)*(?:\s+{range_word}\s+\d+(?:\s+\d+)*)?\s*$',
+        '',
+        line, flags=re.IGNORECASE,
     ).strip()
-    # Chapter + verse only: e.g. "10 1"
-    line = re.sub(r'\s+\d+\s+\d+\s*$', '', line).strip()
-    # Just chapter/single number: e.g. "26"
-    line = re.sub(r'\s+\d+\s*$', '', line).strip()
     return line
 
 
@@ -734,6 +754,37 @@ def _strip_section_verse_refs(section_text: str, language: str) -> str:
     return "\n".join(cleaned).strip()
 
 
+def _strip_bare_verse_refs(text: str, language: str) -> str:
+    """Strip bare (non-parenthetical) inline verse references from pope body text.
+
+    After expand_bible_refs() converts abbreviations to full names and
+    normalize_verse_refs() spaces out the numbers, a citation like "Mt 5,17"
+    becomes "Matteo 5 17".  Parenthetical groups are removed by _smooth_for_tts,
+    but non-parenthetical occurrences (e.g. after a closing guillemet: "»Mt 5,17")
+    survive as bare "Matteo 5 17" — this function removes those.
+
+    Requires at least two separate digit groups (chapter + verse) to avoid
+    false-positives such as "nel capitolo 5" where only one number follows.
+
+    Called ONLY for pope body text — never for reading/gospel headers where
+    the book name must be preserved.
+    """
+    _exp = LANGUAGE_BIBLE_EXPANSIONS.get(language, {})
+    if not _exp:
+        return text
+    _books = sorted(set(_exp.values()), key=len, reverse=True)
+    _books_pat = "|".join(re.escape(b) for b in _books)
+    _range_w = re.escape(VERSE_RANGE_WORDS.get(language, "to"))
+    # Match: BookName <digits> <digits> [<range_word> <digits>]
+    text = re.sub(
+        rf'\b(?:{_books_pat})\s+\d+\s+\d+(?:\s+{_range_w}\s+\d+)?\b',
+        ' ',
+        text,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r'[ \t]{2,}', ' ', text).strip()
+
+
 # ---------------------------------------------------------------------------
 # Position-based section detection (for flat/single-paragraph feed texts)
 # ---------------------------------------------------------------------------
@@ -816,7 +867,14 @@ def _build_segments_positional(
     pos_vangelo = find_pos("vangelo")
 
     if pos_prima == -1 or pos_vangelo == -1:
-        return [flat_text]
+        # Special case: some feeds (e.g. ES) omit the "Primera Lectura" label
+        # and start directly with a book+verse reference.  If the gospel IS
+        # found but the first-reading label is missing, treat position 0 as
+        # the start of the first reading so the gospel split still works.
+        if pos_prima == -1 and pos_vangelo != -1:
+            pos_prima = 0
+        else:
+            return [flat_text]
 
     has_comment = pre_comment_meta is not None
     segments: list[str] = []
@@ -898,6 +956,7 @@ def _build_segments_positional(
             pope_intro = f"{pope_title} {pope_intro}"
         comment_section = f"__POPE__ {comment_word} {pope_intro}."
         if pope_body:
+            pope_body = _strip_bare_verse_refs(pope_body, lang)
             comment_section = f"{comment_section}\n{pope_body}"
         segments.append(comment_section)
 
@@ -968,9 +1027,15 @@ def build_liturgy_segments(description: str, lang: str = "it") -> list[str]:
     # vangelo land on the same line — which happens with flat text because an
     # unanchored alternative (e.g. "dal\s+vangelo") matches anywhere in the
     # single-line text while the prima anchor still fires at position 0.
-    if idx_prima == -1 or idx_vangelo == -1 or idx_prima >= idx_vangelo:
+    if idx_vangelo == -1 or (idx_prima != -1 and idx_prima >= idx_vangelo):
         flat_text = " ".join(lines)
         return _build_segments_positional(flat_text, lang, patterns, pre_comment_meta)
+
+    # Some feeds (e.g. ES bare-reference format) omit the section label entirely
+    # and start directly with the book+verse reference line.  When the gospel IS
+    # found but the first-reading label is not, treat line 0 as the prima start.
+    if idx_prima == -1:
+        idx_prima = 0
 
     has_comment = pre_comment_meta is not None and idx_vangelo != -1
 
@@ -1054,6 +1119,7 @@ def build_liturgy_segments(description: str, lang: str = "it") -> list[str]:
             # Normalise the raw comment content for TTS
             comment_content = normalize_for_tts(pre_comment_content_raw, lang=lang) if pre_comment_content_raw else ""
         if comment_content:
+            comment_content = _strip_bare_verse_refs(comment_content, lang)
             comment_section = f"{comment_section}\n{comment_content}"
         segments.append(comment_section)
 

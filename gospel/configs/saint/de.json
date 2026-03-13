@@ -1,0 +1,14 @@
+{
+  "language": "de",
+  "bucket_name": "gospelpodcast-87c74.firebasestorage.app",
+  "storage_prefix": "saint/de",
+  "voice_key": "de-DE-Neural2-B",
+  "podcast_info": {
+    "title": "Tagesheiliger (Deutsch)",
+    "author": "Vatican News",
+    "website": "",
+    "description": "Tagesheiliger von Vatican News",
+    "cover_art": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/saint/de/cover.png",
+    "rss_url": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/saint/de/podcast_feed.xml"
+  }
+}

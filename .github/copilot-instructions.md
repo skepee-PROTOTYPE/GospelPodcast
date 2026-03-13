@@ -75,10 +75,29 @@ stripped before TTS reads them. The function `_strip_verse_refs_from_header()` r
 patterns like "1 1 a 13" or just "26" from a header line. `_strip_section_verse_refs()` applies
 this to the first two lines of every segment (the section label and the book-source line).
 
+**Inline parenthetical citations** (e.g. `(Mt 5,17)` or `(cfr Lc 23,34)`) that appear inside the
+body text of the pope's reflection are ALSO removed. By the time `_smooth_for_tts()` runs, these
+have been expanded by `expand_bible_refs()` + `normalize_verse_refs()` to `(Matteo 5 17)` /
+`(confronta Luca 23 34)`. The function removes entire parenthetical groups that contain at least one
+digit via `re.sub(r"\([^()]{0,120}\d[^()]{0,60}\)", " ", ...)` before stripping lone parentheses.
+
 Examples of correct TTS output:
 - `"Dal libro della Genesi 1,1-13"` → `"Dal libro della Genesi"`
 - `"Prima lettura dal Deuteronomio 26,16-19"` → `"Prima lettura dal Deuteronomio"`
 - `"Proclamação do Evangelho ... segundo Mateus 17,1-9"` → `"Proclamação do Evangelho ... segundo Mateus"`
+- `"...il papa cita (Mt 5,17) nella sua riflessione..."` → `"...il papa cita nella sua riflessione..."`
+
+**Bare (non-parenthetical) citations** in the pope body (e.g. `»Mt 5,17` without wrapping parentheses)
+also become `Matteo 5 17` after expansion. These are caught by `_strip_bare_verse_refs(text, language)`,
+which matches `BookName digit digit` patterns (requiring at least two digit groups to avoid false
+positive on single-number sentences). It is called on the assembled pope body in **all three code paths**:
+`build_liturgy_segments` (line-based), `_build_segments_positional` (positional fallback), and
+`html_scraper._pope_segment()`. It is intentionally **not applied** to reading/gospel segments, where
+the book name in the header must be preserved.
+
+- `"»Mt 5,17"` → expanded to `"Matteo 5 17"` → `_strip_bare_verse_refs` removes it → `""`
+- Single-number sentences like `"nel capitolo 5"` are **not** affected (requires 2 digit groups).
+- Book name without digits (`"il vangelo di Marco"`) is **not** affected.
 
 Vatican News feeds also emit a **standalone abbreviated reference line** (e.g. `"Gn 37,3-4"` or `"Matteo 21,33-43"`) as a separate line after the book-source header. `_strip_section_verse_refs()` detects and **drops entirely** any of the first 4 lines of a segment that match a book abbreviation or full book name followed only by verse numbers. The drop regex covers both short abbreviations (`Gn`, `Mt`) and full capitalised names (`Matteo`, `Giovanni Paolo`).
 
@@ -86,7 +105,27 @@ This stripping is applied in **both** the line-based and the positional code pat
 
 ---
 
-## 5. Key constants and where they live
+## 5. Semicolons must NOT produce mid-sentence pauses
+
+Semicolons in the gospel text (e.g. "non crediate; non temere") are converted to **commas** in
+`_smooth_for_tts()`, NOT to `__PAUSE__` markers. Neural2 voices produce natural brief pauses at
+commas without requiring explicit `<break>` tags. Adding a hard `<break time="0.3s"/>` at every
+semicolon creates choppy, unnatural delivery in long gospel quotes.
+
+`__PAUSE__` markers are retained in `_escape_and_mark()` for future programmatic use but are **no
+longer generated** by the semicolon substitution. Do NOT revert this to `__PAUSE__`.
+
+```python
+# CORRECT — semicolons become commas for natural Neural2 prosody:
+smoothed = re.sub(r"[ \t]*;[ \t]*", ", ", smoothed)
+
+# WRONG — do NOT use:
+# smoothed = re.sub(r"[ \t]*;[ \t]*", " __PAUSE__ ", smoothed)
+```
+
+---
+
+## 6. Key constants and where they live
 
 | Constant / function | File | Purpose |
 |---|---|---|
@@ -96,13 +135,14 @@ This stripping is applied in **both** the line-based and the positional code pat
 | `POPE_COMMENT_INTRO_PATTERNS` | `text_normalizer.py` | Opening phrases of pope reflection |
 | `POPE_COMMENT_LABELS` | `text_normalizer.py` | Per-language "Comment by Pope" announcement string |
 | `_build_segments_positional()` | `text_normalizer.py` | Positional fallback for flat-text feeds |
-| `_strip_verse_refs_from_header()` | `text_normalizer.py` | Removes trailing chapter/verse numbers |
+| `_strip_verse_refs_from_header()` | `text_normalizer.py` | Removes trailing chapter/verse numbers from headers |
+| `_strip_bare_verse_refs()` | `text_normalizer.py` | Removes bare `BookName digit digit` patterns from pope body (non-parenthetical refs) |
+| `_smooth_for_tts()` | `text_normalizer.py` | Cleans punctuation; semicolons→commas; removes parenthetical verse citations |
 | `_section_to_ssml()` | `audio_generator.py` | Converts one segment to SSML with pope prosody |
 | `_build_episode_ssml()` | `audio_generator.py` | Assembles full episode SSML with section breaks |
-
 ---
 
-## 6. SSML chunking must never split inside block-level tags
+## 7. SSML chunking must never split inside block-level tags
 
 When a segment (typically the Gospel on Sundays) exceeds `_SSML_BYTE_LIMIT` (4800 bytes),
 `_synth_segment_safe()` splits the SSML at `<break>` boundaries. **Splits must only occur at
@@ -113,7 +153,7 @@ Neural2 voices reject with `400 Invalid SSML`. The chunker tracks `tag_depth` (i
 
 ---
 
-## 7. Test cases that must keep working
+## 8. Test cases that must keep working
 
 ```python
 from gospel.text_normalizer import build_liturgy_segments

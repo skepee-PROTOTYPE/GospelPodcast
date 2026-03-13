@@ -7,9 +7,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install system deps (curl for health, no ffmpeg needed for normal speed)
+# Install system deps: curl for health checks, ffmpeg for audio chunking/concat
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     curl \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy source

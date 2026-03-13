@@ -1,0 +1,14 @@
+{
+  "language": "pt",
+  "bucket_name": "gospelpodcast-87c74.firebasestorage.app",
+  "storage_prefix": "saint/pt",
+  "voice_key": "pt-BR-Neural2-B",
+  "podcast_info": {
+    "title": "Santo do Dia (Português)",
+    "author": "Vatican News",
+    "website": "",
+    "description": "Santo do dia pelo Vatican News",
+    "cover_art": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/saint/pt/cover.png",
+    "rss_url": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/saint/pt/podcast_feed.xml"
+  }
+}

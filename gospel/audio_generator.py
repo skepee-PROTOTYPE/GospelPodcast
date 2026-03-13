@@ -141,7 +141,16 @@ def _section_to_ssml(segment: str) -> str:
             sub_header_raw = second
             body_start = 2
 
-    body_raw = re.sub(r"\s*\n\s*", " ", "\n".join(lines[body_start:])).strip()
+    # Join body lines, inserting a period at line ends that have no sentence
+    # punctuation — Vatican News <p> tags often omit trailing periods, which
+    # causes TTS to read adjacent sentences as one continuous unbroken stream.
+    _body_lines = [ln.strip() for ln in "\n".join(lines[body_start:]).split("\n") if ln.strip()]
+    _joined_body: list[str] = []
+    for _i, _ln in enumerate(_body_lines):
+        if _i < len(_body_lines) - 1 and not re.search(r'[.!?,:]$|__QEND__\s*$', _ln):
+            _ln = _ln + '.'
+        _joined_body.append(_ln)
+    body_raw = " ".join(_joined_body)
 
     parts: list[str] = []
 

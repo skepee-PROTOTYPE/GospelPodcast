@@ -27,6 +27,7 @@ from bs4 import BeautifulSoup
 from gospel.text_normalizer import (
     _extract_pope_meta,
     _find_pope_attribution_in_lines,
+    _strip_bare_verse_refs,
     _strip_section_verse_refs,
     html_to_plain_text,
     normalize_for_tts,
@@ -345,6 +346,8 @@ def _pope_segment(pope_plain: str, lang: str) -> Optional[str]:
         if body_text.strip()
         else ""
     )
+    if body_norm:
+        body_norm = _strip_bare_verse_refs(body_norm, lang)
     return f"{header}\n{body_norm}" if body_norm else header
 
 

@@ -1,0 +1,14 @@
+{
+  "language": "es",
+  "bucket_name": "gospelpodcast-87c74.firebasestorage.app",
+  "storage_prefix": "saint/es",
+  "voice_key": "es-ES-Neural2-B",
+  "podcast_info": {
+    "title": "Santos del Día (Español)",
+    "author": "Vatican News",
+    "website": "",
+    "description": "Santo del día desde Vatican News",
+    "cover_art": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/saint/es/cover.png",
+    "rss_url": "https://storage.googleapis.com/gospelpodcast-87c74.firebasestorage.app/saint/es/podcast_feed.xml"
+  }
+}
