@@ -8,6 +8,7 @@ param (
     [string]$ProjectId    = "",
     [string]$Bucket       = "",
     [string]$PodcastEmail = "",
+    [string]$TtsProvider  = "edge",
     [string]$Region       = "europe-west1",
     [string]$ServiceName  = "gospel-tts",
     [string]$ScheduleTime = "0 6 * * *",   # 06:00 daily
@@ -51,6 +52,7 @@ Write-Host "  Bucket  : $Bucket"
 Write-Host "  Image   : $ImageTag"
 Write-Host "  Region  : $Region"
 Write-Host "  Service : $ServiceName"
+Write-Host "  TTS     : $TtsProvider"
 Write-Host "=================================================================" -ForegroundColor Yellow
 
 # ── 1. set project ─────────────────────────────────────────────────────────────
@@ -94,7 +96,7 @@ RunOrDie "gcloud","run","deploy",$ServiceName,
     "--platform","managed",
     "--no-allow-unauthenticated",
     "--service-account",$RunSA,
-    "--set-env-vars","FIREBASE_BUCKET=$Bucket,TZ=$TimeZone,PODCAST_EMAIL=$PodcastEmail",
+    "--set-env-vars","FIREBASE_BUCKET=$Bucket,TZ=$TimeZone,PODCAST_EMAIL=$PodcastEmail,TTS_PROVIDER=$TtsProvider",
     "--memory","512Mi",
     "--timeout","300",
     "--project",$ProjectId
@@ -119,54 +121,46 @@ if (-not $schedSaExists) {
 }
 RunOrDie "gcloud","run","services","add-iam-policy-binding",$ServiceName,"--region",$Region,"--member=serviceAccount:$SchedSA","--role=roles/run.invoker","--project",$ProjectId
 
-# ── 7. create Cloud Scheduler jobs (one per language, staggered 2 min apart) ──
-Write-Host "`n[6/6] Creating Cloud Scheduler jobs..." -ForegroundColor Green
+# ── 7. create a single Cloud Scheduler job that publishes all languages ────────
+Write-Host "`n[6/6] Creating Cloud Scheduler job..." -ForegroundColor Green
 
-$langs = @(
-    @{ code = "it"; minute = 0  },
-    @{ code = "en"; minute = 2  },
-    @{ code = "de"; minute = 4  },
-    @{ code = "fr"; minute = 6  },
-    @{ code = "es"; minute = 8  },
-    @{ code = "pt"; minute = 10 }
-)
+$langs = @("it", "en", "de", "fr", "es", "pt")
 
-foreach ($lang in $langs) {
-    $code     = $lang.code
-    $min      = $lang.minute
-    $hour     = 6
-    $schedule = "$min $hour * * *"
-    $jobName  = "gospel-publish-$code"
-    $uri      = "$RunUrl/publish?lang=$code"
+$jobName = "gospel-publish-all"
+$uri     = "$RunUrl/publish-all"
 
-    # Delete existing job silently so re-run is idempotent (ignore NOT_FOUND on first run)
-    try { gcloud scheduler jobs delete $jobName --location $Region --quiet --project $ProjectId *>$null } catch { }
+# Remove per-language legacy jobs silently (idempotent cleanup on re-deploy)
+foreach ($code in $langs) {
+    try { gcloud scheduler jobs delete "gospel-publish-$code" --location $Region --quiet --project $ProjectId *>$null } catch { }
     $LASTEXITCODE = 0
-
-    RunOrDie "gcloud","scheduler","jobs","create","http",$jobName,
-        "--location",$Region,
-        "--schedule=$schedule",
-        "--time-zone=$TimeZone",
-        "--uri=$uri",
-        "--http-method=POST",
-        "--oidc-service-account-email=$SchedSA",
-        "--project",$ProjectId
-    $minPadded = '{0:D2}' -f $min
-    Write-Host "  Scheduled $code at ${hour}:$minPadded $TimeZone -> $uri" -ForegroundColor Gray
 }
+
+# Delete existing all-languages job silently so re-run is idempotent
+try { gcloud scheduler jobs delete $jobName --location $Region --quiet --project $ProjectId *>$null } catch { }
+$LASTEXITCODE = 0
+
+RunOrDie "gcloud","scheduler","jobs","create","http",$jobName,
+    "--location",$Region,
+    "--schedule=$ScheduleTime",
+    "--time-zone=$TimeZone",
+    "--uri=$uri",
+    "--http-method=POST",
+    "--oidc-service-account-email=$SchedSA",
+    "--attempt-deadline=540s",
+    "--project",$ProjectId
+Write-Host "  Scheduled all languages at $ScheduleTime $TimeZone -> $uri" -ForegroundColor Gray
 
 # ── summary ───────────────────────────────────────────────────────────────────
 Write-Host "`n=================================================================" -ForegroundColor Yellow
 Write-Host "  Deploy complete!" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Cloud Run : $RunUrl"
-  Write-Host "  Health    : $RunUrl/ping"
+Write-Host "  Health    : $RunUrl/ping"
 Write-Host ""
 Write-Host "  RSS feeds (register these once in Spotify for Creators):"
-foreach ($lang in $langs) {
-    $code = $lang.code
+foreach ($code in $langs) {
     Write-Host "    $code : https://storage.googleapis.com/$Bucket/gospel/$code/podcast_feed.xml"
 }
 Write-Host ""
-Write-Host "  Jobs run daily at 06:00-06:10 $TimeZone, 2-min stagger per language."
+Write-Host "  Single job runs daily at $ScheduleTime $TimeZone -> /publish-all"
 Write-Host "=================================================================" -ForegroundColor Yellow

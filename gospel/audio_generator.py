@@ -4,10 +4,20 @@ import re
 import shutil
 import subprocess
 import tempfile
+import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from google.cloud import texttospeech
+try:
+    from google.cloud import texttospeech
+except Exception:
+    texttospeech = None
+
+try:
+    import edge_tts
+except Exception:
+    edge_tts = None
+
 from gospel.text_normalizer import normalize_for_tts, build_liturgy_segments
 
 # Break between liturgy sections (used in SSML <break> tags).
@@ -32,6 +42,16 @@ _LANG_BCP47: Dict[str, str] = {
     "fr": "fr-FR",
     "es": "es-ES",
     "pt": "pt-BR",
+}
+
+# Free Edge TTS voices per supported language.
+_EDGE_VOICES: Dict[str, str] = {
+    "it": "it-IT-DiegoNeural",
+    "en": "en-US-GuyNeural",
+    "de": "de-DE-ConradNeural",
+    "fr": "fr-FR-HenriNeural",
+    "es": "es-ES-AlvaroNeural",
+    "pt": "pt-BR-AntonioNeural",
 }
 
 
@@ -245,6 +265,11 @@ def _build_episode_ssml(title: str, segments: list[str], lang: str = "it") -> st
 def _synthesize(ssml: str, voice_name: str, language_code: str,
                 speaking_rate: float = 1.0) -> bytes:
     """Call Cloud TTS and return raw MP3 bytes."""
+    if texttospeech is None:
+        raise RuntimeError(
+            "google-cloud-texttospeech is not installed. "
+            "Install it or set TTS_PROVIDER=edge."
+        )
     client = texttospeech.TextToSpeechClient()
     response = client.synthesize_speech(
         input=texttospeech.SynthesisInput(ssml=ssml),
@@ -258,6 +283,58 @@ def _synthesize(ssml: str, voice_name: str, language_code: str,
         ),
     )
     return response.audio_content
+
+
+def _strip_ssml_tags(ssml: str) -> str:
+    """Convert SSML-ish content to plain text for non-SSML providers."""
+    text = re.sub(r"<[^>]+>", " ", ssml)
+    text = html.unescape(text)
+    text = text.replace("__PAUSE__", ", ")
+    text = text.replace("__QSTART__", "")
+    text = text.replace("__QEND__", "")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _edge_rate(speaking_rate: float) -> str:
+    """Convert speaking_rate (1.0 baseline) to Edge TTS percentage string."""
+    pct = int(round((speaking_rate - 1.0) * 100))
+    return f"{pct:+d}%"
+
+
+def _edge_synthesize_to_file(text: str, voice_name: str, speaking_rate: float, out_path: str) -> None:
+    """Synthesize text to MP3 using Edge TTS."""
+    if edge_tts is None:
+        raise RuntimeError(
+            "edge-tts is not installed. Add edge-tts to requirements and redeploy."
+        )
+
+    clean_text = _strip_ssml_tags(text)
+    if not clean_text:
+        clean_text = " "
+
+    async def _run() -> None:
+        communicate = edge_tts.Communicate(
+            text=clean_text,
+            voice=voice_name,
+            rate=_edge_rate(speaking_rate),
+        )
+        await communicate.save(out_path)
+
+    asyncio.run(_run())
+
+
+def _section_to_plain_text(segment: str) -> str:
+    """Flatten one segment to plain text while preserving headings."""
+    is_pope = segment.startswith("__POPE__")
+    text = segment[len("__POPE__"):].strip() if is_pope else segment.strip()
+    text = re.sub(r"[ \t]*\n[ \t]*", "\n", text)
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if not lines:
+        return ""
+    plain = ". ".join(lines)
+    plain = re.sub(r"\s+", " ", plain).strip()
+    return plain
 
 
 def _synth_segment_safe(ssml: str, voice_name: str, language_code: str,
@@ -403,7 +480,7 @@ def _concat_mp3s(paths: List[str], out_path: str, ffmpeg: str) -> None:
 # -- AudioGenerator ------------------------------------------------------------
 
 class AudioGenerator:
-    """Generates podcast audio using Google Cloud TTS (Neural2 male voices).
+    """Generates podcast audio using Google Cloud TTS or Edge TTS.
 
     Parameters
     ----------
@@ -414,23 +491,88 @@ class AudioGenerator:
         One of 'normal' (1.0), 'slow' (0.85), 'fast' (1.15).
     out_dir: Optional[str]
         Output directory. Defaults to gospel/out.
+    provider: Optional[str]
+        ``google`` (default) or ``edge``. If omitted, reads env var
+        ``TTS_PROVIDER`` and defaults to ``google``.
     """
 
     def __init__(self, voice: str = "it-IT-Neural2-C", speed: str = "normal",
-                 out_dir: Optional[str] = None):
+                 out_dir: Optional[str] = None, provider: Optional[str] = None):
+        raw_provider = (provider or os.environ.get("TTS_PROVIDER", "google")).strip().lower()
+        self.provider = "edge" if raw_provider in {"edge", "edge-tts", "edgetts"} else "google"
+
         lang_prefix = voice.split("-")[0].lower() if voice else "it"
         self.lang = lang_prefix if lang_prefix in _VOICES else "it"
-        if re.match(r"^[a-z]{2}-[A-Z]{2}-", voice):
-            self.voice_name = voice
+
+        if self.provider == "edge":
+            # Neural2/WaveNet/Standard/Studio names are Google-only — substitute
+            # the Edge TTS equivalent so they are never forwarded to Edge TTS.
+            _google_voice = bool(re.match(
+                r"^[a-z]{2}-[A-Z]{2}-(?:Neural2|Wavenet|Standard|Studio|Polyglot|News)\b",
+                voice,
+            ))
+            if _google_voice or not re.match(r"^[a-z]{2}-[A-Z]{2}-", voice):
+                self.voice_name = _EDGE_VOICES.get(self.lang, _EDGE_VOICES["it"])
+            else:
+                # Already a valid Edge-format voice name (e.g. it-IT-DiegoNeural)
+                self.voice_name = voice
         else:
-            self.voice_name = _VOICES.get(self.lang, _VOICES["it"])
+            if re.match(r"^[a-z]{2}-[A-Z]{2}-", voice):
+                self.voice_name = voice
+            else:
+                self.voice_name = _VOICES.get(self.lang, _VOICES["it"])
+
         self.language_code = _LANG_BCP47.get(self.lang, "it-IT")
         self.speaking_rate = {"slow": 0.85, "normal": 1.0, "fast": 1.15}.get(speed, 1.0)
         self.out_dir = out_dir or os.path.join(os.path.dirname(__file__), "out")
         os.makedirs(self.out_dir, exist_ok=True)
 
     def _synth(self, ssml: str) -> bytes:
+        if self.provider != "google":
+            raise RuntimeError("_synth is only available for provider=google")
         return _synthesize(ssml, self.voice_name, self.language_code, self.speaking_rate)
+
+    def _create_episode_edge(self, title_text: str, segments: list[str], final_mp3: str) -> None:
+        """Synthesize title + sections with Edge TTS and preserve section silence."""
+        ffmpeg = _ffmpeg_bin()
+
+        if not ffmpeg:
+            all_parts = [title_text] + [_section_to_plain_text(seg) for seg in segments]
+            combined = ". ".join([p for p in all_parts if p]).strip()
+            _edge_synthesize_to_file(combined, self.voice_name, self.speaking_rate, final_mp3)
+            return
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            part_paths: list[str] = []
+
+            title_path = os.path.join(tmp_dir, "part_title.mp3")
+            _edge_synthesize_to_file(title_text, self.voice_name, self.speaking_rate, title_path)
+            part_paths.append(title_path)
+
+            for idx, seg in enumerate(segments):
+                plain = _section_to_plain_text(seg)
+                if not plain:
+                    continue
+                p = os.path.join(tmp_dir, f"part_{idx}.mp3")
+                _edge_synthesize_to_file(plain, self.voice_name, self.speaking_rate, p)
+                part_paths.append(p)
+
+            if len(part_paths) == 1:
+                shutil.copy2(part_paths[0], final_mp3)
+                return
+
+            silence_path = os.path.join(tmp_dir, "silence.mp3")
+            _generate_silence(silence_path, ffmpeg, SECTION_SILENCE_S)
+
+            interleaved: list[str] = [part_paths[0]]
+            for p in part_paths[1:]:
+                interleaved.append(silence_path)
+                interleaved.append(p)
+
+            _concat_mp3s(interleaved, final_mp3, ffmpeg)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def create_podcast_episode(self, title: str, description: str) -> Dict:
         """Create an MP3 episode from title + liturgy description.
@@ -453,6 +595,17 @@ class AudioGenerator:
 
         title_text = normalize_for_tts(title, lang=self.lang)
         segments   = build_liturgy_segments(description, lang=self.lang)
+
+        if self.provider == "edge":
+            self._create_episode_edge(title_text, segments, final_mp3)
+            ffmpeg = _ffmpeg_bin()
+            duration = _probe_duration(final_mp3, ffmpeg) if ffmpeg else 0
+            return {
+                "audio_path": final_mp3,
+                "duration":   duration,
+                "filename":   os.path.basename(final_mp3),
+            }
+
         full_ssml  = _build_episode_ssml(title_text, segments, lang=self.lang)
 
         if len(full_ssml.encode("utf-8")) <= _SSML_BYTE_LIMIT:
@@ -518,6 +671,17 @@ class AudioGenerator:
         final_mp3 = os.path.join(self.out_dir, f"{base}.mp3")
 
         title_text = normalize_for_tts(title, lang=self.lang)
+
+        if self.provider == "edge":
+            self._create_episode_edge(title_text, segments, final_mp3)
+            ffmpeg = _ffmpeg_bin()
+            duration = _probe_duration(final_mp3, ffmpeg) if ffmpeg else 0
+            return {
+                "audio_path": final_mp3,
+                "duration":   duration,
+                "filename":   os.path.basename(final_mp3),
+            }
+
         full_ssml  = _build_episode_ssml(title_text, segments, lang=self.lang)
 
         if len(full_ssml.encode("utf-8")) <= _SSML_BYTE_LIMIT:

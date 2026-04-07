@@ -1,6 +1,6 @@
 # ??? Gospel Podcast
 
-Automated multilingual daily Gospel podcast on **Spotify**, powered by Cloud Run, Firebase Storage, and gTTS. Runs daily at **06:00 Rome time**.
+Automated multilingual daily Gospel podcast on **Spotify**, powered by Cloud Run and Firebase Storage. Runs daily at **06:00 Rome time**.
 
 ## ?? Podcasts
 
@@ -21,7 +21,8 @@ Requires Google Cloud CLI (authenticated), a GCP project with billing, and Fireb
 .\deploy.ps1 `
   -ProjectId    "your-gcp-project-id" `
   -Bucket       "your-project.firebasestorage.app" `
-  -PodcastEmail "your@email.com"
+  -PodcastEmail "your@email.com" `
+  -TtsProvider  "edge"
 ```
 
 ## API
@@ -44,7 +45,8 @@ python -m gospel.publish_all_gospel --langs en,it
 
 - **Retention**: rolling 180 episodes (~6 months) per language; expired MP3s deleted automatically.
 - **Audio**: Date ? Psalm ? Gospel ? Pope comment, with 2.5 s silence between sections.
-- **Config**: `gospel/configs/{lang}.json`; secrets via Cloud Run env vars `FIREBASE_BUCKET`, `PODCAST_EMAIL`.
+- **Config**: `gospel/configs/{lang}.json`; Cloud Run env vars `FIREBASE_BUCKET`, `PODCAST_EMAIL`, `TTS_PROVIDER`.
+- **Cost tip**: set `TTS_PROVIDER=edge` to avoid paid Google Cloud Text-to-Speech charges.
 
 ## License
 

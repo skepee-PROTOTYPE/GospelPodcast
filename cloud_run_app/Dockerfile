@@ -23,7 +23,9 @@ COPY cloud_run_app/app.py /app/app.py
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Expose port
-ENV PORT=8080
+# Default to free Edge TTS — override with TTS_PROVIDER=google to use Neural2
+ENV PORT=8080 \
+    TTS_PROVIDER=edge
 
 # Runtime env: set bucket via deploy time
 # ENV FIREBASE_BUCKET=your-bucket-name

@@ -6,6 +6,7 @@ This app publishes a daily Gospel audio per language and updates the RSS feed in
 - Google Cloud project + Firebase enabled
 - Grant Cloud Run service account access to Storage (`roles/storage.admin` or limited write)
 - Set `FIREBASE_BUCKET` to your Firebase Storage bucket name
+- Set `TTS_PROVIDER=edge` to use free Edge TTS and avoid Google TTS API charges
 
 ## Build & Deploy (gcloud)
 
@@ -22,7 +23,7 @@ gcloud run deploy gospel-tts \
   --image gcr.io/<YOUR_GCP_PROJECT>/gospel-tts \
   --region europe-west1 \
   --allow-unauthenticated \
-  --set-env-vars FIREBASE_BUCKET=<YOUR-FIREBASE-BUCKET>,TZ=Europe/Rome
+  --set-env-vars FIREBASE_BUCKET=<YOUR-FIREBASE-BUCKET>,TZ=Europe/Rome,TTS_PROVIDER=edge
 
 # Test
 curl -X POST "https://gospel-tts-<hash>-ew1.a.run.app/publish?lang=it"
