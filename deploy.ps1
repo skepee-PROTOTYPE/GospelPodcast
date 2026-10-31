@@ -98,7 +98,7 @@ RunOrDie "gcloud","run","deploy",$ServiceName,
     "--service-account",$RunSA,
     "--set-env-vars","FIREBASE_BUCKET=$Bucket,TZ=$TimeZone,PODCAST_EMAIL=$PodcastEmail,TTS_PROVIDER=$TtsProvider",
     "--memory","512Mi",
-    "--timeout","300",
+    "--timeout","540",
     "--project",$ProjectId
 
 # Allow public access via IAM (allUsers invoker)
@@ -155,7 +155,7 @@ Write-Host "`n================================================================="
 Write-Host "  Deploy complete!" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Cloud Run : $RunUrl"
-Write-Host "  Health    : $RunUrl/ping"
+Write-Host "  Health    : $RunUrl/healthz"
 Write-Host ""
 Write-Host "  RSS feeds (register these once in Spotify for Creators):"
 foreach ($code in $langs) {

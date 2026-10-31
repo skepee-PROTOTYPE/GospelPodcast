@@ -15,6 +15,7 @@ if REPO_ROOT not in sys.path:
 from gospel_tts_app.feeds import FEED_URLS
 from gospel_tts_app.rss_client import RSSClient
 from gospel.audio_generator import AudioGenerator
+from gospel.feed_check import check_feed
 from gospel.gospel_podcast_publisher import GospelPodcastPublisher
 from gospel.html_scraper import VaticanHTMLScraper
 from gospel.saint_scraper import fetch_saints, _LANG_CFG as SAINT_LANGS
@@ -39,6 +40,46 @@ def _load_voice(lang: str) -> str:
             return json.load(f).get("voice_key", lang)
     except Exception:
         return lang  # falls back to _VOICES[lang] inside AudioGenerator
+
+
+def _public_rss_url(publisher: GospelPodcastPublisher) -> str:
+    return (publisher.podcast_info.get('rss_url')
+            or f"https://storage.googleapis.com/{publisher.bucket_name}/{publisher.rss_blob_path}")
+
+
+def _verify_published(tag: str, publisher: GospelPodcastPublisher) -> Optional[Dict]:
+    """Re-read the public feed and check the episode just added is live.
+
+    Returns an error dict if verification failed, else None.
+    """
+    problems = check_feed(_public_rss_url(publisher), expected_guid=publisher.episodes[0]['guid'])
+    if problems:
+        logger.error("[%s] post-publish verification failed: %s", tag, "; ".join(problems))
+        return {"error": "post-publish verification failed", "problems": problems}
+    return None
+
+
+def _run_safely(tag: str, fn, *args, **kwargs) -> Tuple[Dict, int]:
+    """Call a _do_publish* function, turning any exception into a logged 500 so
+    one failing language never prevents the others from running."""
+    try:
+        return fn(*args, **kwargs)
+    except Exception as e:
+        logger.exception("[%s] publish failed", tag)
+        return {"error": f"{type(e).__name__}: {e}"}, 500
+
+
+def _summarize(name: str, results: Dict) -> int:
+    """Log failed languages at ERROR and return 200 only if every language succeeded.
+
+    Any failure yields 500 (not 207) because Cloud Scheduler counts every 2xx
+    as success; a 5xx marks the job failed and triggers its retries.
+    """
+    failed = [lang for lang, v in results.items() if v["status"] != 200]
+    if failed:
+        logger.error("[%s] FAILED languages: %s", name, ", ".join(failed))
+        return 500
+    return 200
 
 
 # ── core publish logic ────────────────────────────────────────────────────────
@@ -127,6 +168,10 @@ def _do_publish(lang: str, force: bool = False) -> Tuple[Dict, int]:
     if not ok:
         return {"error": "rss upload failed"}, 500
 
+    verify_err = _verify_published(lang, publisher)
+    if verify_err:
+        return verify_err, 500
+
     logger.info("[%s] published: %s", lang, title)
     return {"lang": lang, "title": title, "audio_url": audio_url, "rss": publisher.rss_blob_path}, 200
 
@@ -187,7 +232,7 @@ def _do_publish_history(lang: str) -> Tuple[Dict, int]:
             "rss": publisher.rss_blob_path}, 200
 
 
-
+@app.get('/healthz')
 def healthz():
     return jsonify({"status": "ok"})
 
@@ -197,7 +242,7 @@ def publish():
     """Publish one language episode. Query params: ?lang=<code>[&force=1]"""
     lang = request.args.get('lang', 'it')
     force = request.args.get('force', '').lower() in ('1', 'true', 'yes')
-    result, status = _do_publish(lang, force=force)
+    result, status = _run_safely(lang, _do_publish, lang, force=force)
     return jsonify(result), status
 
 
@@ -205,18 +250,17 @@ def publish():
 def publish_all():
     """Publish all supported languages sequentially and return a per-language summary.
 
-    A 207 Multi-Status is returned if any language fails so Cloud Scheduler
-    treats the job as failed and can alert/retry.
+    Returns 500 if any language fails so Cloud Scheduler marks the job failed
+    and retries it (already-published languages are skipped on retry).
     Query param: ?force=1 to regenerate even if already published today.
     """
     force = request.args.get('force', '').lower() in ('1', 'true', 'yes')
     results = {}
     for lang in FEED_URLS:
-        result, status = _do_publish(lang, force=force)
+        result, status = _run_safely(lang, _do_publish, lang, force=force)
         results[lang] = {"status": status, "detail": result}
 
-    overall = 200 if all(v["status"] == 200 for v in results.values()) else 207
-    return jsonify(results), overall
+    return jsonify(results), _summarize("publish-all", results)
 
 
 @app.post('/publish-history')
@@ -226,15 +270,14 @@ def publish_history():
     """
     lang = request.args.get('lang')
     if lang:
-        result, status = _do_publish_history(lang)
+        result, status = _run_safely(lang, _do_publish_history, lang)
         return jsonify(result), status
     # All languages
     results = {}
     for l in FEED_URLS:
-        result, status = _do_publish_history(l)
+        result, status = _run_safely(l, _do_publish_history, l)
         results[l] = {"status": status, "detail": result}
-    overall = 200 if all(v["status"] == 200 for v in results.values()) else 207
-    return jsonify(results), overall
+    return jsonify(results), _summarize("publish-history", results)
 
 
 # ── saint publish logic ───────────────────────────────────────────────────────
@@ -319,6 +362,10 @@ def _do_publish_saint(lang: str) -> Tuple[Dict, int]:
     if not ok:
         return {"error": "rss upload failed"}, 500
 
+    verify_err = _verify_published(f"saint/{lang}", publisher)
+    if verify_err:
+        return verify_err, 500
+
     logger.info("[saint/%s] published: %s", lang, title)
     return {"lang": lang, "title": title, "audio_url": audio_url, "rss": publisher.rss_blob_path}, 200
 
@@ -327,7 +374,7 @@ def _do_publish_saint(lang: str) -> Tuple[Dict, int]:
 def publish_saint():
     """Publish Saint of the Day for one language. Query param: ?lang=<code>"""
     lang = request.args.get('lang', 'it')
-    result, status = _do_publish_saint(lang)
+    result, status = _run_safely(f"saint/{lang}", _do_publish_saint, lang)
     return jsonify(result), status
 
 
@@ -336,10 +383,9 @@ def publish_saint_all():
     """Publish Saint of the Day for all supported languages sequentially."""
     results = {}
     for lang in SAINT_LANGS:
-        result, status = _do_publish_saint(lang)
+        result, status = _run_safely(f"saint/{lang}", _do_publish_saint, lang)
         results[lang] = {"status": status, "detail": result}
-    overall = 200 if all(v["status"] == 200 for v in results.values()) else 207
-    return jsonify(results), overall
+    return jsonify(results), _summarize("publish-saint-all", results)
 
 
 if __name__ == '__main__':

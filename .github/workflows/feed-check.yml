@@ -1,0 +1,25 @@
+# Daily independent check that every gospel feed has today's episode with a
+# reachable MP3. Runs outside GCP so it also catches a Scheduler job that never
+# fired or a Cloud Run service that is down. A failed run triggers GitHub's
+# "workflow failed" email (free for public repos).
+name: Feed check
+
+on:
+  schedule:
+    - cron: "0 8 * * *"   # 08:00 UTC = 09:00/10:00 Rome, after the 06:00 publish + retries
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Check published feeds
+        run: python -m gospel.feed_check

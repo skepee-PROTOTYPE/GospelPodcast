@@ -72,7 +72,7 @@ class GospelPodcastPublisher:
             }
             channel = root.find('channel')
             if channel is None:
-                return
+                raise ValueError("RSS has no <channel> element")
             self.episodes = []
             for item in channel.findall('item'):
                 enclosure = item.find('enclosure')
@@ -108,8 +108,9 @@ class GospelPodcastPublisher:
                     })
             logger.info(f"Loaded {len(self.episodes)} existing episodes from RSS.")
         except Exception as e:
-            logger.warning(f"Could not load existing RSS feed: {e}. Starting fresh.")
-            self.episodes = []
+            # Never "start fresh" on a read error: the next upload would
+            # overwrite the published feed and wipe every past episode.
+            raise RuntimeError(f"Could not load existing RSS feed {self.rss_blob_path}: {e}") from e
 
     def prune_episodes(self, max_episodes: int = 180) -> None:
         """Trim episode history to max_episodes, deleting expired MP3s from storage."""

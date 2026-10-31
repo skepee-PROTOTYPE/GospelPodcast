@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -321,7 +322,17 @@ def _edge_synthesize_to_file(text: str, voice_name: str, speaking_rate: float, o
         )
         await communicate.save(out_path)
 
-    asyncio.run(_run())
+    # The free Edge endpoint fails transiently (handshake errors, 403s);
+    # retry with backoff before giving up on the whole episode.
+    delays = [5, 15]
+    for attempt in range(len(delays) + 1):
+        try:
+            asyncio.run(_run())
+            return
+        except Exception:
+            if attempt == len(delays):
+                raise
+            time.sleep(delays[attempt])
 
 
 def _section_to_plain_text(segment: str) -> str:
