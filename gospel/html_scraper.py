@@ -388,6 +388,78 @@ def _extract_title(soup: BeautifulSoup, lang: str, date: datetime.date) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Episode display title (RSS only; the spoken intro keeps the liturgical title)
+# ---------------------------------------------------------------------------
+
+_MONTHS: dict[str, list[str]] = {
+    "it": ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio",
+           "agosto", "settembre", "ottobre", "novembre", "dicembre"],
+    "en": ["January", "February", "March", "April", "May", "June", "July",
+           "August", "September", "October", "November", "December"],
+    "es": ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+           "agosto", "septiembre", "octubre", "noviembre", "diciembre"],
+    "fr": ["janvier", "février", "mars", "avril", "mai", "juin", "juillet",
+           "août", "septembre", "octobre", "novembre", "décembre"],
+    "de": ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli",
+           "August", "September", "Oktober", "November", "Dezember"],
+    "pt": ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho",
+           "agosto", "setembro", "outubro", "novembro", "dezembro"],
+}
+
+_DATE_FMT: dict[str, str] = {
+    "it": "{d} {m} {y}",
+    "en": "{m} {d}, {y}",
+    "es": "{d} de {m} de {y}",
+    "fr": "{d} {m} {y}",
+    "de": "{d}. {m} {y}",
+    "pt": "{d} de {m} de {y}",
+}
+
+_GOSPEL_WORD: dict[str, str] = {
+    "it": "Vangelo", "en": "Gospel", "es": "Evangelio",
+    "fr": "Évangile", "de": "Evangelium", "pt": "Evangelho",
+}
+
+# Evangelist name as it appears in the gospel heading → book abbreviation.
+_EVANGELISTS: dict[str, list[tuple[str, str]]] = {
+    "it": [("Matteo", "Mt"), ("Marco", "Mc"), ("Luca", "Lc"), ("Giovanni", "Gv")],
+    "en": [("Matthew", "Mt"), ("Mark", "Mk"), ("Luke", "Lk"), ("John", "Jn")],
+    "es": [("Mateo", "Mt"), ("Marcos", "Mc"), ("Lucas", "Lc"), ("Juan", "Jn")],
+    "fr": [("Matthieu", "Mt"), ("Marc", "Mc"), ("Luc", "Lc"), ("Jean", "Jn")],
+    "de": [("Matthäus", "Mt"), ("Markus", "Mk"), ("Lukas", "Lk"), ("Johannes", "Joh")],
+    "pt": [("Mateus", "Mt"), ("Marcos", "Mc"), ("Lucas", "Lc"), ("João", "Jo")],
+}
+
+
+def _gospel_reference(gospel_plain: str, lang: str) -> Optional[str]:
+    """Build e.g. "Lc 14,1.7-11" from the gospel section's first two lines
+    ("Dal Vangelo secondo Luca" / "Lc 14,1.7-11"). Returns None if unsure."""
+    lines = [ln.strip() for ln in gospel_plain.splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return None
+    book = next((abbr for name, abbr in _EVANGELISTS.get(lang, [])
+                 if re.search(rf"\b{name}\b", lines[0])), None)
+    m = re.search(r"\d+\s*[,:].*?\d[a-z]?(?=\)|$)", lines[1])
+    if not book or not m:
+        return None
+    return f"{book} {m.group(0).strip()}"
+
+
+def episode_title(lang: str, date: datetime.date, liturgical_title: str,
+                  gospel_ref: Optional[str] = None) -> str:
+    """Searchable RSS title: "31 ottobre 2026 – Vangelo Lc 14,1.7-11 – <liturgical title>"."""
+    months = _MONTHS.get(lang, _MONTHS["en"])
+    date_str = _DATE_FMT.get(lang, _DATE_FMT["en"]).format(
+        d=date.day, m=months[date.month - 1], y=date.year)
+    parts = [date_str]
+    if gospel_ref:
+        parts.append(f"{_GOSPEL_WORD.get(lang, 'Gospel')} {gospel_ref}")
+    if liturgical_title:
+        parts.append(liturgical_title)
+    return " – ".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Main scraper class
 # ---------------------------------------------------------------------------
 
@@ -409,6 +481,13 @@ class VaticanHTMLScraper:
             )
         self.lang = lang
         self._cfg = _LANG_CFG[lang]
+        self.gospel_ref: Optional[str] = None   # set by fetch_segments()
+        self.date: Optional[datetime.date] = None
+
+    def episode_title(self, liturgical_title: str) -> str:
+        """Dated, searchable RSS title for the page last fetched."""
+        return episode_title(self.lang, self.date or datetime.date.today(),
+                             liturgical_title, self.gospel_ref)
 
     def day_url(self, date: Optional[datetime.date] = None) -> str:
         """Return the Vatican News URL for today (or *date*)."""
@@ -432,6 +511,8 @@ class VaticanHTMLScraper:
         """
         if date is None:
             date = datetime.date.today()
+        self.date = date
+        self.gospel_ref = None
 
         url = self.day_url(date)
         html = _fetch(url)
@@ -471,6 +552,7 @@ class VaticanHTMLScraper:
         h2_gospel = _find_h2(soup, cfg["h2_gospel"])
         if h2_gospel:
             gospel_plain = _section_plain(h2_gospel)
+            self.gospel_ref = _gospel_reference(gospel_plain, lang)
             gospel_norm = _strip_section_verse_refs(
                 normalize_for_tts(gospel_plain, lang=lang, flatten_lines=False),
                 lang,

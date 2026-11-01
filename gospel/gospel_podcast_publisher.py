@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import json
 import logging
 from datetime import datetime
@@ -9,6 +10,24 @@ import xml.etree.ElementTree as ET
 from xml.dom import minidom
 
 logger = logging.getLogger(__name__)
+
+# OP3 (op3.dev): free, open podcast analytics. Enclosures in the published feed
+# go through this redirect prefix; episodes keep the plain storage URL internally.
+OP3_PREFIX = "https://op3.dev/e/"
+
+
+def strip_op3(url: str) -> str:
+    """Return the plain storage URL for a (possibly) OP3-prefixed enclosure URL."""
+    if url.startswith(OP3_PREFIX):
+        rest = url[len(OP3_PREFIX):]
+        return rest if rest.startswith(("http://", "https://")) else f"https://{rest}"
+    return url
+
+
+def add_op3(url: str) -> str:
+    if not url or url.startswith(OP3_PREFIX):
+        return url
+    return OP3_PREFIX + re.sub(r"^https?://", "", url)
 
 class GospelPodcastPublisher:
     """Multi-language podcast publisher with Firebase Storage and RSS feed.
@@ -76,7 +95,7 @@ class GospelPodcastPublisher:
             self.episodes = []
             for item in channel.findall('item'):
                 enclosure = item.find('enclosure')
-                audio_url = enclosure.get('url', '') if enclosure is not None else ''
+                audio_url = strip_op3(enclosure.get('url', '')) if enclosure is not None else ''
                 title_el = item.find('title')
                 desc_el = item.find('description')
                 pub_el = item.find('pubDate')
@@ -223,7 +242,7 @@ class GospelPodcastPublisher:
         owner_email = self.podcast_info.get('email', '')
         if owner_email:
             owner = ET.SubElement(channel, 'itunes:owner')
-            ET.SubElement(owner, 'itunes:name').text = self.podcast_info.get('author', 'Vatican News')
+            ET.SubElement(owner, 'itunes:name').text = self.podcast_info.get('author', '')
             ET.SubElement(owner, 'itunes:email').text = owner_email
             ET.SubElement(channel, 'managingEditor').text = owner_email
         cover_art_url = self.podcast_info.get('cover_art', '')
@@ -254,7 +273,7 @@ class GospelPodcastPublisher:
             ET.SubElement(item, 'guid', {'isPermaLink': 'false'}).text = ep['guid']
             ET.SubElement(item, 'link').text = ep['audio_url']
             ET.SubElement(item, 'enclosure', {
-                'url': ep['audio_url'],
+                'url': add_op3(ep['audio_url']),
                 'type': 'audio/mpeg',
                 'length': str(ep.get('file_size', 0) or 0)
             })

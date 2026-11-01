@@ -105,12 +105,14 @@ def _do_publish(lang: str, force: bool = False) -> Tuple[Dict, int]:
     audio_gen = AudioGenerator(voice=_load_voice(lang), speed='normal')
 
     title = description = pub_date = guid = ""
+    rss_title = ""   # dated, searchable title for the feed; audio intro keeps *title*
     segments: Optional[list] = None
 
     # --- Attempt 1: Vatican News HTML scraper (best structural quality) ---
     try:
         scraper = VaticanHTMLScraper(lang)
         title, segments = scraper.fetch_segments()
+        rss_title = scraper.episode_title(title)
         guid = scraper.day_url()
         pub_date = datetime.date.today().strftime("%a, %d %b %Y 00:00:00 +0000")
         description = title
@@ -128,6 +130,7 @@ def _do_publish(lang: str, force: bool = False) -> Tuple[Dict, int]:
         description = latest['summary'] or title
         pub_date = latest.get('pub_date', '')
         guid = latest.get('link', '')
+        rss_title = title
 
     def _cleanup(*paths):
         for p in paths:
@@ -140,9 +143,11 @@ def _do_publish(lang: str, force: bool = False) -> Tuple[Dict, int]:
     if not force:
         existing_guids = {ep['guid'] for ep in publisher.episodes}
         existing_titles = {(ep['title'] or '').lower().strip() for ep in publisher.episodes}
-        if (guid and guid in existing_guids) or title.lower().strip() in existing_titles:
-            logger.info("[%s] already published: %s", lang, title)
-            return {"lang": lang, "title": title, "skipped": True, "rss": publisher.rss_blob_path}, 200
+        if ((guid and guid in existing_guids)
+                or title.lower().strip() in existing_titles
+                or rss_title.lower().strip() in existing_titles):
+            logger.info("[%s] already published: %s", lang, rss_title)
+            return {"lang": lang, "title": rss_title, "skipped": True, "rss": publisher.rss_blob_path}, 200
 
     # Generate audio (use structured segments from scraper when available)
     if segments is not None:
@@ -156,7 +161,7 @@ def _do_publish(lang: str, force: bool = False) -> Tuple[Dict, int]:
         _cleanup(audio_path)
         return {"error": "audio upload failed"}, 500
 
-    publisher.add_episode(audio_url, title, description,
+    publisher.add_episode(audio_url, rss_title, description,
                           duration=int(episode.get('duration', 0) or 0),
                           pub_date=pub_date,
                           guid=guid)
@@ -172,8 +177,8 @@ def _do_publish(lang: str, force: bool = False) -> Tuple[Dict, int]:
     if verify_err:
         return verify_err, 500
 
-    logger.info("[%s] published: %s", lang, title)
-    return {"lang": lang, "title": title, "audio_url": audio_url, "rss": publisher.rss_blob_path}, 200
+    logger.info("[%s] published: %s", lang, rss_title)
+    return {"lang": lang, "title": rss_title, "audio_url": audio_url, "rss": publisher.rss_blob_path}, 200
 
 
 def _do_publish_history(lang: str) -> Tuple[Dict, int]:

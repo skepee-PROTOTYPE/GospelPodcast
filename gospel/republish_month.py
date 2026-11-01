@@ -67,6 +67,7 @@ def publish_day(lang: str, date: datetime.date) -> str:
     try:
         scraper = VaticanHTMLScraper(lang)
         title, segments = scraper.fetch_segments(date)
+        rss_title = scraper.episode_title(title)
         guid = scraper.day_url(date)
         pub_date = date.strftime("%a, %d %b %Y 00:00:00 +0000")
     except Exception as e:
@@ -100,7 +101,7 @@ def publish_day(lang: str, date: datetime.date) -> str:
 
         publisher.add_episode(
             audio_url,
-            title,
+            rss_title,
             title,  # description = title (HTML scraper doesn't return a summary)
             duration=int(episode.get("duration", 0)),
             pub_date=pub_date,

@@ -72,6 +72,12 @@ def check_feed(rss_url: str, expected_guid: Optional[str] = None,
     if not audio_url:
         problems.append("newest episode has no audio enclosure")
         return problems
+    # Check the storage file directly so the daily check isn't counted as a
+    # listen in OP3 stats.
+    if audio_url.startswith("https://op3.dev/e/"):
+        audio_url = audio_url[len("https://op3.dev/e/"):]
+        if not audio_url.startswith(("http://", "https://")):
+            audio_url = "https://" + audio_url
     try:
         with _request(audio_url, method="HEAD") as resp:
             size = int(resp.headers.get("Content-Length") or 0)
